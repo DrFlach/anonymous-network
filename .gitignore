@@ -1,0 +1,21 @@
+# Private keys — each node must generate its own
+identity.json
+
+# Runtime files
+anon-router
+router.dat
+router.log
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Vagrant
+deploy/.vagrant/

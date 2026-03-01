@@ -2,10 +2,8 @@
   "listen_address": "0.0.0.0",
   "listen_port": 7656,
   "seed_routers": [
-    "192.168.56.101:7656",
-    "192.168.56.102:7656"
+    "34.118.110.89:7656"
   ],
-  "router_info_file": "router.dat",
   "identity_file": "identity.json",
   "max_connections": 200,
   "is_floodfill": true,
@@ -21,6 +19,5 @@
     "https://dns.google/resolve",
     "https://mozilla.cloudflare-dns.com/dns-query"
   ],
-  "message_queue_size": 1000,
   "log_level": "INFO"
 }
