@@ -5,6 +5,7 @@ import (
     "crypto/ed25519"
     "encoding/binary"
     "fmt"
+    "sort"
     "time"
 )
 
@@ -82,9 +83,15 @@ func (ri *RouterInfo) Serialize() []byte {
     // Write timestamp
     binary.Write(buf, binary.BigEndian, ri.Timestamp.Unix())
     
-    // Write capabilities
+    // Write capabilities (sorted keys for deterministic serialization)
     binary.Write(buf, binary.BigEndian, uint16(len(ri.Capabilities)))
-    for cap, enabled := range ri.Capabilities {
+    capKeys := make([]string, 0, len(ri.Capabilities))
+    for cap := range ri.Capabilities {
+        capKeys = append(capKeys, cap)
+    }
+    sort.Strings(capKeys)
+    for _, cap := range capKeys {
+        enabled := ri.Capabilities[cap]
         capBytes := []byte(cap)
         binary.Write(buf, binary.BigEndian, uint16(len(capBytes)))
         buf.Write(capBytes)

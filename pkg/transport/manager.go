@@ -1,9 +1,11 @@
 package transport
 
 import (
+    "context"
     "fmt"
     "net"
     "sync"
+    "syscall"
     "time"
 
     "network/pkg/crypto"
@@ -56,7 +58,14 @@ func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
 
 // Start starts the transport manager and listens for connections
 func (m *Manager) Start(listenAddr string) error {
-    listener, err := net.Listen("tcp", listenAddr)
+    lc := net.ListenConfig{
+        Control: func(network, address string, c syscall.RawConn) error {
+            return c.Control(func(fd uintptr) {
+                syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+            })
+        },
+    }
+    listener, err := lc.Listen(context.Background(), "tcp", listenAddr)
     if err != nil {
         return fmt.Errorf("failed to start listener: %w", err)
     }
@@ -94,8 +103,13 @@ func (m *Manager) acceptLoop() {
             if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
                 continue
             }
-            m.logger.Error("Accept error: %v", err)
-            continue
+            select {
+            case <-m.stopChan:
+                return
+            default:
+                m.logger.Error("Accept error: %v", err)
+                continue
+            }
         }
         
         m.logger.Debug("Accepted connection from %s", conn.RemoteAddr())
@@ -413,7 +427,8 @@ func (m *Manager) Stop() {
     }
     m.mu.Unlock()
     
-    m.wg.Wait()
+    // Close incoming message channel so consumers unblock
+    close(m.incomingMsg)
     
     m.logger.Info("Transport manager stopped")
 }

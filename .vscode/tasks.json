@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Kill and Rebuild",
+			"type": "shell",
+			"command": "pkill -9 -f anon-router 2>/dev/null; sleep 2; cd /home/DrFlachAdmin/Desktop/anonymous-network && go build -o anon-router ./cmd/router/ 2>&1; echo BUILD_STATUS=$?",
+			"group": "build"
+		}
+	]
+}
