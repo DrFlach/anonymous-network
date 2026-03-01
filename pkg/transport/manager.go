@@ -5,6 +5,7 @@ import (
     "encoding/base64"
     "fmt"
     "net"
+    "strings"
     "sync"
     "syscall"
     "time"
@@ -189,6 +190,9 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 
+    // Send our peer list to the new peer so they can discover others
+    m.sendPeerList(peer)
+
     // Receive messages until disconnect
     m.receiveLoop(peer)
 
@@ -259,6 +263,9 @@ func (m *Manager) ConnectTo(address string) error {
     m.mu.Unlock()
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
+
+    // Send our peer list to the new peer so they can discover others
+    m.sendPeerList(peer)
 
     // Start receiving messages
     m.wg.Add(1)
@@ -521,6 +528,86 @@ func (m *Manager) checkConnections() {
                 peer.Conn.Close()
             }
         }
+    }
+}
+
+// sendPeerList sends our current peer list to a specific peer
+func (m *Manager) sendPeerList(target *PeerConnection) {
+    m.mu.RLock()
+    var addrs []string
+    for _, p := range m.peers {
+        if p.RouterHash != target.RouterHash && p.Address != "" {
+            addrs = append(addrs, p.Address)
+        }
+    }
+    m.mu.RUnlock()
+
+    if len(addrs) == 0 {
+        return
+    }
+
+    payload := []byte(strings.Join(addrs, ","))
+    msg := router.NewMessage(router.MsgTypePeerList, payload)
+    data, err := msg.Serialize()
+    if err != nil {
+        return
+    }
+    if err := target.Conn.SendFrame(data); err != nil {
+        m.logger.Debug("Failed to send peer list to %s: %v", target.Address, err)
+    } else {
+        m.logger.Debug("Sent peer list (%d peers) to %s", len(addrs), target.Address)
+    }
+}
+
+// HandlePeerList processes a received peer list and connects to unknown peers
+func (m *Manager) HandlePeerList(payload []byte) {
+    if len(payload) == 0 {
+        return
+    }
+    addrs := strings.Split(string(payload), ",")
+    for _, addr := range addrs {
+        addr = strings.TrimSpace(addr)
+        if addr == "" {
+            continue
+        }
+
+        // Skip if it looks like our own listener
+        if h, _, err := net.SplitHostPort(addr); err == nil {
+            if h == "127.0.0.1" || h == "::1" {
+                continue
+            }
+        }
+
+        // Check by IP host — skip if already connected to same host
+        addrHost := addr
+        if h, _, err := net.SplitHostPort(addr); err == nil {
+            addrHost = h
+        }
+
+        m.mu.RLock()
+        alreadyConnected := false
+        for _, peer := range m.peersByAddr {
+            peerHost := peer.Address
+            if h, _, err := net.SplitHostPort(peer.Address); err == nil {
+                peerHost = h
+            }
+            if peerHost == addrHost {
+                alreadyConnected = true
+                break
+            }
+        }
+        m.mu.RUnlock()
+
+        if alreadyConnected {
+            continue
+        }
+
+        m.logger.Info("Peer exchange: discovered %s, connecting...", addr)
+        go func(a string) {
+            if err := m.ConnectTo(a); err != nil {
+                m.logger.Debug("Peer exchange connect to %s failed: %v", a, err)
+            }
+        }(addr)
     }
 }
 

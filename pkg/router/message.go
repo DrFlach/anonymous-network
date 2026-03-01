@@ -20,6 +20,7 @@ const (
     MsgTypeTunnelBuildReply
     MsgTypeTunnelData
     MsgTypeDeliveryStatus
+    MsgTypePeerList
 )
 
 // Message represents a network protocol message

@@ -362,6 +362,10 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 		case router.MsgTypeTunnelData:
 			handleTunnelData(transportMgr, parsedMsg, participants, logger)
 
+		case router.MsgTypePeerList:
+			logger.Debug("Received peer list from %x (%d bytes)", msg.From[:8], len(parsedMsg.Payload))
+			transportMgr.HandlePeerList(parsedMsg.Payload)
+
 		default:
 			logger.Debug("Unknown message type: %d", parsedMsg.Type)
 		}
