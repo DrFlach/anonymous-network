@@ -21,6 +21,7 @@ type PeerConnection struct {
     Conn         *ntcp2.Connection
     RouterHash   [32]byte
     Address      string
+    ListenAddrs  []string // announced reachable listen addresses
     Connected    time.Time
     LastActivity time.Time
 }
@@ -37,6 +38,9 @@ type Manager struct {
     incomingMsg chan *IncomingMessage
     stopChan    chan struct{}
     wg          sync.WaitGroup
+
+    // Our listen port for self-announcement
+    listenPort int
 
     // Auto-reconnect to seeds
     seedAddrs []string
@@ -72,6 +76,11 @@ func (m *Manager) SetSeeds(seeds []string) {
 
 // Start starts the transport manager and listens for connections
 func (m *Manager) Start(listenAddr string) error {
+    // Extract listen port for self-announcement
+    if _, portStr, err := net.SplitHostPort(listenAddr); err == nil {
+        fmt.Sscanf(portStr, "%d", &m.listenPort)
+    }
+
     lc := net.ListenConfig{
         Control: func(network, address string, c syscall.RawConn) error {
             return c.Control(func(fd uintptr) {
@@ -98,6 +107,10 @@ func (m *Manager) Start(listenAddr string) error {
     // Start seed reconnection loop
     m.wg.Add(1)
     go m.seedReconnectLoop()
+
+    // Start periodic peer exchange
+    m.wg.Add(1)
+    go m.peerExchangeLoop()
     
     return nil
 }
@@ -190,7 +203,8 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 
-    // Send our peer list to the new peer so they can discover others
+    // Announce our listen addresses and share known peers
+    m.announceSelf(peer)
     m.sendPeerList(peer)
 
     // Receive messages until disconnect
@@ -253,6 +267,7 @@ func (m *Manager) ConnectTo(address string) error {
         Conn:         ntcpConn,
         RouterHash:   routerHash,
         Address:      address,
+        ListenAddrs:  []string{address}, // outbound: we know the real listen address
         Connected:    time.Now(),
         LastActivity: time.Now(),
     }
@@ -264,7 +279,8 @@ func (m *Manager) ConnectTo(address string) error {
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
 
-    // Send our peer list to the new peer so they can discover others
+    // Announce our listen addresses and share known peers
+    m.announceSelf(peer)
     m.sendPeerList(peer)
 
     // Start receiving messages
@@ -531,13 +547,68 @@ func (m *Manager) checkConnections() {
     }
 }
 
-// sendPeerList sends our current peer list to a specific peer
+// getLocalListenAddrs returns our own reachable listen addresses (all non-loopback IPs + listen port)
+func (m *Manager) getLocalListenAddrs() []string {
+    if m.listenPort == 0 {
+        return nil
+    }
+    var addrs []string
+    ifaces, err := net.Interfaces()
+    if err != nil {
+        return nil
+    }
+    for _, iface := range ifaces {
+        if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+            continue
+        }
+        ifAddrs, err := iface.Addrs()
+        if err != nil {
+            continue
+        }
+        for _, a := range ifAddrs {
+            if ipnet, ok := a.(*net.IPNet); ok {
+                ip := ipnet.IP.To4()
+                if ip != nil && !ip.IsLoopback() {
+                    addrs = append(addrs, fmt.Sprintf("%s:%d", ip.String(), m.listenPort))
+                }
+            }
+        }
+    }
+    return addrs
+}
+
+// announceSelf sends our own listen addresses to a peer (prefixed with @ to distinguish from peer sharing)
+func (m *Manager) announceSelf(peer *PeerConnection) {
+    ownAddrs := m.getLocalListenAddrs()
+    if len(ownAddrs) == 0 {
+        return
+    }
+    var parts []string
+    for _, a := range ownAddrs {
+        parts = append(parts, "@"+a)
+    }
+    payload := []byte(strings.Join(parts, ","))
+    msg := router.NewMessage(router.MsgTypePeerList, payload)
+    data, err := msg.Serialize()
+    if err != nil {
+        return
+    }
+    if err := peer.Conn.SendFrame(data); err != nil {
+        m.logger.Debug("Failed to announce self to %s: %v", peer.Address, err)
+    }
+}
+
+// sendPeerList sends known peer listen addresses to a specific peer
 func (m *Manager) sendPeerList(target *PeerConnection) {
     m.mu.RLock()
     var addrs []string
     for _, p := range m.peers {
-        if p.RouterHash != target.RouterHash && p.Address != "" {
-            addrs = append(addrs, p.Address)
+        if p.RouterHash == target.RouterHash {
+            continue
+        }
+        // Only share peers whose listen addresses we know
+        for _, la := range p.ListenAddrs {
+            addrs = append(addrs, la)
         }
     }
     m.mu.RUnlock()
@@ -555,59 +626,121 @@ func (m *Manager) sendPeerList(target *PeerConnection) {
     if err := target.Conn.SendFrame(data); err != nil {
         m.logger.Debug("Failed to send peer list to %s: %v", target.Address, err)
     } else {
-        m.logger.Debug("Sent peer list (%d peers) to %s", len(addrs), target.Address)
+        m.logger.Debug("Sent peer list (%d addrs) to %s", len(addrs), target.Address)
     }
 }
 
-// HandlePeerList processes a received peer list and connects to unknown peers
-func (m *Manager) HandlePeerList(payload []byte) {
+// HandlePeerList processes a received peer list message.
+// Entries prefixed with '@' are self-announcements (the sender's own listen addresses).
+// Regular entries are addresses of other peers to connect to.
+func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
     if len(payload) == 0 {
         return
     }
-    addrs := strings.Split(string(payload), ",")
-    for _, addr := range addrs {
-        addr = strings.TrimSpace(addr)
-        if addr == "" {
+    parts := strings.Split(string(payload), ",")
+    for _, part := range parts {
+        part = strings.TrimSpace(part)
+        if part == "" {
             continue
         }
 
-        // Skip if it looks like our own listener
-        if h, _, err := net.SplitHostPort(addr); err == nil {
-            if h == "127.0.0.1" || h == "::1" {
-                continue
+        if strings.HasPrefix(part, "@") {
+            // Self-announcement: store as the sender's listen address
+            listenAddr := strings.TrimPrefix(part, "@")
+            m.mu.Lock()
+            if peer, ok := m.peers[from]; ok {
+                found := false
+                for _, la := range peer.ListenAddrs {
+                    if la == listenAddr {
+                        found = true
+                        break
+                    }
+                }
+                if !found {
+                    peer.ListenAddrs = append(peer.ListenAddrs, listenAddr)
+                    m.logger.Debug("Peer %s announced listen addr: %s", peer.Address, listenAddr)
+                }
+            }
+            m.mu.Unlock()
+        } else {
+            // Peer address to try connecting to
+            m.tryConnectToPeer(part)
+        }
+    }
+}
+
+// tryConnectToPeer attempts to connect to a discovered peer address
+func (m *Manager) tryConnectToPeer(addr string) {
+    // Skip loopback
+    if h, _, err := net.SplitHostPort(addr); err == nil {
+        if h == "127.0.0.1" || h == "::1" {
+            return
+        }
+    }
+
+    // Check by IP host — skip if already connected to same host
+    addrHost := addr
+    if h, _, err := net.SplitHostPort(addr); err == nil {
+        addrHost = h
+    }
+
+    // Also skip our own addresses
+    for _, ownAddr := range m.getLocalListenAddrs() {
+        if ownAddr == addr {
+            return
+        }
+    }
+
+    m.mu.RLock()
+    alreadyConnected := false
+    for _, peer := range m.peersByAddr {
+        peerHost := peer.Address
+        if h, _, err := net.SplitHostPort(peer.Address); err == nil {
+            peerHost = h
+        }
+        if peerHost == addrHost {
+            alreadyConnected = true
+            break
+        }
+    }
+    m.mu.RUnlock()
+
+    if alreadyConnected {
+        return
+    }
+
+    m.logger.Info("Peer exchange: discovered %s, connecting...", addr)
+    go func(a string) {
+        if err := m.ConnectTo(a); err != nil {
+            m.logger.Debug("Peer exchange connect to %s failed: %v", a, err)
+        }
+    }(addr)
+}
+
+// peerExchangeLoop periodically re-broadcasts peer lists and self-announcements
+func (m *Manager) peerExchangeLoop() {
+    defer m.wg.Done()
+
+    ticker := time.NewTicker(60 * time.Second)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-m.stopChan:
+            return
+        case <-ticker.C:
+            m.mu.RLock()
+            peers := make([]*PeerConnection, 0, len(m.peers))
+            for _, p := range m.peers {
+                peers = append(peers, p)
+            }
+            m.mu.RUnlock()
+
+            for _, p := range peers {
+                m.announceSelf(p)
+                m.sendPeerList(p)
             }
         }
-
-        // Check by IP host — skip if already connected to same host
-        addrHost := addr
-        if h, _, err := net.SplitHostPort(addr); err == nil {
-            addrHost = h
-        }
-
-        m.mu.RLock()
-        alreadyConnected := false
-        for _, peer := range m.peersByAddr {
-            peerHost := peer.Address
-            if h, _, err := net.SplitHostPort(peer.Address); err == nil {
-                peerHost = h
-            }
-            if peerHost == addrHost {
-                alreadyConnected = true
-                break
-            }
-        }
-        m.mu.RUnlock()
-
-        if alreadyConnected {
-            continue
-        }
-
-        m.logger.Info("Peer exchange: discovered %s, connecting...", addr)
-        go func(a string) {
-            if err := m.ConnectTo(a); err != nil {
-                m.logger.Debug("Peer exchange connect to %s failed: %v", a, err)
-            }
-        }(addr)
     }
 }
 
