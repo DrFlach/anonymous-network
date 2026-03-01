@@ -2,6 +2,7 @@ package transport
 
 import (
     "context"
+    "encoding/base64"
     "fmt"
     "net"
     "sync"
@@ -9,6 +10,7 @@ import (
     "time"
 
     "network/pkg/crypto"
+    "network/pkg/router"
     "network/pkg/transport/ntcp2"
     "network/pkg/util"
 )
@@ -34,6 +36,10 @@ type Manager struct {
     incomingMsg chan *IncomingMessage
     stopChan    chan struct{}
     wg          sync.WaitGroup
+
+    // Auto-reconnect to seeds
+    seedAddrs []string
+    seedMu    sync.Mutex
 }
 
 // IncomingMessage represents a message received from a peer
@@ -54,6 +60,13 @@ func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
         incomingMsg: make(chan *IncomingMessage, 1000),
         stopChan:    make(chan struct{}),
     }
+}
+
+// SetSeeds sets the seed addresses for auto-reconnection
+func (m *Manager) SetSeeds(seeds []string) {
+    m.seedMu.Lock()
+    defer m.seedMu.Unlock()
+    m.seedAddrs = seeds
 }
 
 // Start starts the transport manager and listens for connections
@@ -80,6 +93,10 @@ func (m *Manager) Start(listenAddr string) error {
     // Start connection monitor
     m.wg.Add(1)
     go m.monitorConnections()
+
+    // Start seed reconnection loop
+    m.wg.Add(1)
+    go m.seedReconnectLoop()
     
     return nil
 }
@@ -135,23 +152,28 @@ func (m *Manager) handleIncoming(conn net.Conn) {
         return
     }
     
-    // Create NTCP2 connection
+    // Create NTCP2 connection and perform handshake (includes identity exchange)
     ntcpConn := ntcp2.NewConnection(conn)
-    
-    // Perform handshake as responder
     if err := ntcpConn.Handshake(m.identity, false); err != nil {
         m.logger.Error("Handshake failed with %s: %v", conn.RemoteAddr(), err)
         return
     }
-    
-    m.logger.Info("Handshake completed with %s", conn.RemoteAddr())
-    
-    // For now, we'll use a placeholder router hash
-    // In full implementation, this would be exchanged during handshake
-    var routerHash [32]byte
-    copy(routerHash[:], []byte(conn.RemoteAddr().String())) // Temporary placeholder
-    
-    // Add to peer list
+
+    // Get the real router hash from the handshake identity exchange
+    routerHash := ntcpConn.RemoteRouterHash()
+    hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
+
+    // Check if already connected (by router hash)
+    m.mu.RLock()
+    _, exists := m.peers[routerHash]
+    m.mu.RUnlock()
+    if exists {
+        m.logger.Debug("Already connected to peer %s, dropping duplicate", hashStr)
+        return
+    }
+
+    m.logger.Info("Handshake OK with %s (hash: %s)", conn.RemoteAddr(), hashStr)
+
     peer := &PeerConnection{
         Conn:         ntcpConn,
         RouterHash:   routerHash,
@@ -159,24 +181,24 @@ func (m *Manager) handleIncoming(conn net.Conn) {
         Connected:    time.Now(),
         LastActivity: time.Now(),
     }
-    
+
     m.mu.Lock()
     m.peers[routerHash] = peer
     m.peersByAddr[peer.Address] = peer
     m.mu.Unlock()
-    
-    m.logger.Info("Peer connected: %s (total: %d)", peer.Address, len(m.peers))
-    
-    // Start receiving messages from this peer
+
+    m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
+
+    // Receive messages until disconnect
     m.receiveLoop(peer)
-    
-    // Cleanup on disconnect
+
+    // Cleanup
     m.mu.Lock()
     delete(m.peers, routerHash)
     delete(m.peersByAddr, peer.Address)
     m.mu.Unlock()
-    
-    m.logger.Info("Peer disconnected: %s (total: %d)", peer.Address, len(m.peers))
+
+    m.logger.Info("Peer disconnected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 }
 
 // ConnectTo connects to a remote peer
@@ -185,38 +207,44 @@ func (m *Manager) ConnectTo(address string) error {
     _, exists := m.peersByAddr[address]
     peerCount := len(m.peers)
     m.mu.RUnlock()
-    
+
     if exists {
-        return fmt.Errorf("already connected to %s", address)
+        return nil // already connected, not an error
     }
-    
+
     if peerCount >= m.maxPeers {
         return fmt.Errorf("max peers reached")
     }
-    
+
     m.logger.Info("Connecting to %s...", address)
-    
+
     conn, err := net.DialTimeout("tcp", address, 10*time.Second)
     if err != nil {
         return fmt.Errorf("failed to connect to %s: %w", address, err)
     }
-    
-    // Create NTCP2 connection
+
+    // Create NTCP2 connection and perform handshake (includes identity exchange)
     ntcpConn := ntcp2.NewConnection(conn)
-    
-    // Perform handshake as initiator
     if err := ntcpConn.Handshake(m.identity, true); err != nil {
         conn.Close()
         return fmt.Errorf("handshake failed with %s: %w", address, err)
     }
-    
-    m.logger.Info("Handshake completed with %s", address)
-    
-    // Placeholder router hash
-    var routerHash [32]byte
-    copy(routerHash[:], []byte(address))
-    
-    // Add to peer list
+
+    // Get the real router hash from the handshake
+    routerHash := ntcpConn.RemoteRouterHash()
+    hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
+
+    // Check for duplicate by hash
+    m.mu.RLock()
+    _, hashExists := m.peers[routerHash]
+    m.mu.RUnlock()
+    if hashExists {
+        conn.Close()
+        return nil // already connected via different address
+    }
+
+    m.logger.Info("Handshake OK with %s (hash: %s)", address, hashStr)
+
     peer := &PeerConnection{
         Conn:         ntcpConn,
         RouterHash:   routerHash,
@@ -224,30 +252,108 @@ func (m *Manager) ConnectTo(address string) error {
         Connected:    time.Now(),
         LastActivity: time.Now(),
     }
-    
+
     m.mu.Lock()
     m.peers[routerHash] = peer
     m.peersByAddr[address] = peer
     m.mu.Unlock()
-    
-    m.logger.Info("Peer connected: %s (total: %d)", address, len(m.peers))
-    
+
+    m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
+
     // Start receiving messages
     m.wg.Add(1)
     go func() {
         defer m.wg.Done()
         m.receiveLoop(peer)
-        
-        // Cleanup on disconnect
+
         m.mu.Lock()
         delete(m.peers, routerHash)
         delete(m.peersByAddr, address)
         m.mu.Unlock()
-        
-        m.logger.Info("Peer disconnected: %s (total: %d)", address, len(m.peers))
+
+        m.logger.Info("Peer disconnected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
     }()
-    
+
     return nil
+}
+
+// seedReconnectLoop periodically tries to reconnect to seed nodes
+func (m *Manager) seedReconnectLoop() {
+    defer m.wg.Done()
+
+    // Initial delay to let startup finish
+    select {
+    case <-time.After(5 * time.Second):
+    case <-m.stopChan:
+        return
+    }
+
+    ticker := time.NewTicker(15 * time.Second)
+    defer ticker.Stop()
+
+    for {
+        select {
+        case <-m.stopChan:
+            return
+        case <-ticker.C:
+            m.reconnectSeeds()
+        }
+    }
+}
+
+// reconnectSeeds tries to connect to any seeds we're not yet connected to
+func (m *Manager) reconnectSeeds() {
+    m.seedMu.Lock()
+    seeds := make([]string, len(m.seedAddrs))
+    copy(seeds, m.seedAddrs)
+    m.seedMu.Unlock()
+
+    for _, seed := range seeds {
+        if seed == "" {
+            continue
+        }
+
+        // Extract the host part from the seed address (ip:port -> ip)
+        seedHost := seed
+        if h, _, err := net.SplitHostPort(seed); err == nil {
+            seedHost = h
+        }
+
+        // Check if already connected to this seed (exact match or same host)
+        m.mu.RLock()
+        alreadyConnected := false
+        if _, ok := m.peersByAddr[seed]; ok {
+            alreadyConnected = true
+        } else {
+            // Check if any connected peer has the same host IP
+            for _, peer := range m.peersByAddr {
+                peerHost := peer.Address
+                if h, _, err := net.SplitHostPort(peer.Address); err == nil {
+                    peerHost = h
+                }
+                if peerHost == seedHost {
+                    alreadyConnected = true
+                    break
+                }
+            }
+        }
+        m.mu.RUnlock()
+
+        if alreadyConnected {
+            continue
+        }
+        if err := m.ConnectTo(seed); err != nil {
+            m.logger.Debug("Seed reconnect to %s: %v", seed, err)
+        }
+    }
+}
+
+// IsConnectedTo checks if already connected to an address
+func (m *Manager) IsConnectedTo(address string) bool {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    _, exists := m.peersByAddr[address]
+    return exists
 }
 
 // receiveLoop receives messages from a peer
@@ -264,8 +370,13 @@ func (m *Manager) receiveLoop(peer *PeerConnection) {
         
         data, err := peer.Conn.ReceiveFrame()
         if err != nil {
-            m.logger.Debug("Receive error from %s: %v", peer.Address, err)
-            return
+            select {
+            case <-m.stopChan:
+                return
+            default:
+                m.logger.Debug("Receive error from %s: %v", peer.Address, err)
+                return
+            }
         }
         
         peer.LastActivity = time.Now()
@@ -390,8 +501,11 @@ func (m *Manager) checkConnections() {
     m.mu.RUnlock()
     
     now := time.Now()
-    heartbeat := []byte("PING")
-    
+
+    // Build a proper serialized ping message for heartbeats
+    pingMsg := router.NewMessage(router.MsgTypePing, []byte("HEARTBEAT"))
+    heartbeat, _ := pingMsg.Serialize()
+
     for _, peer := range peers {
         // Check if connection is alive
         if now.Sub(peer.LastActivity) > 60*time.Second {

@@ -3,6 +3,7 @@ package ntcp2
 import (
     "encoding/binary"
     "fmt"
+    "io"
     "net"
     "sync"
     "time"
@@ -15,6 +16,7 @@ type Connection struct {
     conn          net.Conn
     session       *crypto.EncryptionSession
     remotePubKey  [32]byte
+    remoteHash    [32]byte // Remote peer's router hash
     mu            sync.Mutex
     lastActivity  time.Time
     closed        bool
@@ -29,7 +31,7 @@ func NewConnection(conn net.Conn) *Connection {
     }
 }
 
-// Handshake performs the NTCP2 handshake
+// Handshake performs the NTCP2 handshake and identity exchange
 func (c *Connection) Handshake(identity *crypto.RouterIdentity, isInitiator bool) error {
     if isInitiator {
         return c.initiatorHandshake(identity)
@@ -37,8 +39,16 @@ func (c *Connection) Handshake(identity *crypto.RouterIdentity, isInitiator bool
     return c.responderHandshake(identity)
 }
 
+// RemoteRouterHash returns the router hash of the remote peer (available after handshake)
+func (c *Connection) RemoteRouterHash() [32]byte {
+    return c.remoteHash
+}
+
 // initiatorHandshake performs handshake as initiator
 func (c *Connection) initiatorHandshake(identity *crypto.RouterIdentity) error {
+    c.conn.SetDeadline(time.Now().Add(15 * time.Second))
+    defer c.conn.SetDeadline(time.Time{})
+
     // Generate ephemeral key
     hs, err := NewHandshake(true, identity.EncryptionPrivateKey)
     if err != nil {
@@ -53,7 +63,7 @@ func (c *Connection) initiatorHandshake(identity *crypto.RouterIdentity) error {
     
     // Receive responder's ephemeral key
     var remoteEphem [32]byte
-    if _, err := c.conn.Read(remoteEphem[:]); err != nil {
+    if _, err := io.ReadFull(c.conn, remoteEphem[:]); err != nil {
         return fmt.Errorf("failed to receive ephemeral key: %w", err)
     }
     hs.RemoteEphemeral = remoteEphem
@@ -70,13 +80,32 @@ func (c *Connection) initiatorHandshake(identity *crypto.RouterIdentity) error {
     if err != nil {
         return fmt.Errorf("failed to derive session keys: %w", err)
     }
-    
+
+    // --- Identity exchange (over encrypted channel) ---
+    // Send our router hash
+    if err := c.SendFrame(identity.RouterHash[:]); err != nil {
+        return fmt.Errorf("failed to send identity: %w", err)
+    }
+
+    // Receive remote router hash
+    remoteHashData, err := c.ReceiveFrame()
+    if err != nil {
+        return fmt.Errorf("failed to receive remote identity: %w", err)
+    }
+    if len(remoteHashData) != 32 {
+        return fmt.Errorf("invalid remote identity length: %d", len(remoteHashData))
+    }
+    copy(c.remoteHash[:], remoteHashData)
+
     c.lastActivity = time.Now()
     return nil
 }
 
 // responderHandshake performs handshake as responder
 func (c *Connection) responderHandshake(identity *crypto.RouterIdentity) error {
+    c.conn.SetDeadline(time.Now().Add(15 * time.Second))
+    defer c.conn.SetDeadline(time.Time{})
+
     // Generate ephemeral key
     hs, err := NewHandshake(false, identity.EncryptionPrivateKey)
     if err != nil {
@@ -85,7 +114,7 @@ func (c *Connection) responderHandshake(identity *crypto.RouterIdentity) error {
     
     // Receive initiator's ephemeral key
     var remoteEphem [32]byte
-    if _, err := c.conn.Read(remoteEphem[:]); err != nil {
+    if _, err := io.ReadFull(c.conn, remoteEphem[:]); err != nil {
         return fmt.Errorf("failed to receive ephemeral key: %w", err)
     }
     hs.RemoteEphemeral = remoteEphem
@@ -115,7 +144,23 @@ func (c *Connection) responderHandshake(identity *crypto.RouterIdentity) error {
         ReceiveCipher: session.SendCipher,
         SharedSecret:  session.SharedSecret,
     }
-    
+
+    // --- Identity exchange (over encrypted channel) ---
+    // Receive initiator's router hash first
+    remoteHashData, err := c.ReceiveFrame()
+    if err != nil {
+        return fmt.Errorf("failed to receive remote identity: %w", err)
+    }
+    if len(remoteHashData) != 32 {
+        return fmt.Errorf("invalid remote identity length: %d", len(remoteHashData))
+    }
+    copy(c.remoteHash[:], remoteHashData)
+
+    // Send our router hash
+    if err := c.SendFrame(identity.RouterHash[:]); err != nil {
+        return fmt.Errorf("failed to send identity: %w", err)
+    }
+
     c.lastActivity = time.Now()
     return nil
 }
@@ -135,9 +180,9 @@ func (c *Connection) SendFrame(data []byte) error {
         return fmt.Errorf("failed to encrypt frame: %w", err)
     }
     
-    // Send length prefix (2 bytes)
-    lengthBuf := make([]byte, 2)
-    binary.BigEndian.PutUint16(lengthBuf, uint16(len(encrypted)))
+    // Send length prefix (4 bytes for larger frames)
+    lengthBuf := make([]byte, 4)
+    binary.BigEndian.PutUint32(lengthBuf, uint32(len(encrypted)))
     
     if _, err := c.conn.Write(lengthBuf); err != nil {
         return fmt.Errorf("failed to write frame length: %w", err)
@@ -158,20 +203,20 @@ func (c *Connection) ReceiveFrame() ([]byte, error) {
         return nil, fmt.Errorf("connection closed")
     }
     
-    // Read length prefix
-    lengthBuf := make([]byte, 2)
-    if _, err := c.conn.Read(lengthBuf); err != nil {
+    // Read length prefix (4 bytes)
+    lengthBuf := make([]byte, 4)
+    if _, err := io.ReadFull(c.conn, lengthBuf); err != nil {
         return nil, fmt.Errorf("failed to read frame length: %w", err)
     }
     
-    length := binary.BigEndian.Uint16(lengthBuf)
-    if length > 65535 {
+    length := binary.BigEndian.Uint32(lengthBuf)
+    if length > 1<<20 { // 1MB max
         return nil, fmt.Errorf("invalid frame length: %d", length)
     }
     
     // Read encrypted data
     encrypted := make([]byte, length)
-    if _, err := c.conn.Read(encrypted); err != nil {
+    if _, err := io.ReadFull(c.conn, encrypted); err != nil {
         return nil, fmt.Errorf("failed to read frame data: %w", err)
     }
     

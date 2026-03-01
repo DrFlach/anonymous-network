@@ -1,0 +1,114 @@
+[2026-03-01 21:43:48] INFO: ╔══════════════════════════════════════════╗
+[2026-03-01 21:43:48] INFO: ║     Anonymous P2P Network Router         ║
+[2026-03-01 21:43:48] INFO: ║     Version: 0.2.0-alpha                 ║
+[2026-03-01 21:43:48] INFO: ╚══════════════════════════════════════════╝
+[2026-03-01 21:43:48] INFO: Loaded existing router identity
+[2026-03-01 21:43:48] INFO: Router Hash: 8+uk7xzTExi4xjFQq3wvTLZSUwDyoVJkIHGeZpUxZxE
+[2026-03-01 21:43:48] INFO: NetDB initialized
+[2026-03-01 21:43:48] INFO: Floodfill mode: ENABLED
+[2026-03-01 21:43:48] INFO: Transport manager listening on 0.0.0.0:7656
+[2026-03-01 21:43:48] INFO: P2P transport listening on 0.0.0.0:7656
+[2026-03-01 21:43:48] INFO: Connecting to seed router: 192.168.56.101:7656
+[2026-03-01 21:43:48] INFO: Connecting to 192.168.56.101:7656...
+[2026-03-01 21:43:48] INFO: Handshake OK with 192.168.56.101:7656 (hash: 7Z3j7pHc/cc)
+[2026-03-01 21:43:48] INFO: Peer connected: 192.168.56.101:7656 [7Z3j7pHc/cc] (total: 1)
+[2026-03-01 21:43:48] INFO: Connecting to seed router: 192.168.56.102:7656
+[2026-03-01 21:43:48] INFO: Connecting to 192.168.56.102:7656...
+[2026-03-01 21:43:48] INFO: Handshake OK with 192.168.56.102:7656 (hash: BOzpjZTPXRw)
+[2026-03-01 21:43:48] INFO: Peer connected: 192.168.56.102:7656 [BOzpjZTPXRw] (total: 2)
+[2026-03-01 21:43:48] INFO: RouterInfo published
+[2026-03-01 21:43:48] INFO: Tunnel pool started (target: 3 inbound, 3 outbound, length: 3)
+[2026-03-01 21:43:48] INFO: SOCKS5 proxy listening on 127.0.0.1:4447
+[2026-03-01 21:43:48] INFO: ═══════════════════════════════════════════
+[2026-03-01 21:43:48] INFO:   SOCKS5 proxy ready on 127.0.0.1:4447
+[2026-03-01 21:43:48] INFO:   Configure your browser proxy settings    
+[2026-03-01 21:43:48] INFO:   to use this address for anonymous browsing
+[2026-03-01 21:43:48] INFO: ═══════════════════════════════════════════
+[2026-03-01 21:43:48] INFO: Router started successfully
+[2026-03-01 21:43:48] INFO: Press Ctrl+C to stop
+[2026-03-01 21:43:49] INFO: [PROXY] 127.0.0.1:49618 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:43:49] INFO: [DNS] signaler-pa.clients6.google.com → 142.250.130.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:43:49] INFO: [PROXY] 127.0.0.1:49634 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:43:49] INFO: [DNS] signaler-pa.clients6.google.com → 142.250.130.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:43:50] INFO: [PROXY] 127.0.0.1:49650 → bam.nr-data.net:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:43:50] INFO: [DNS] bam.nr-data.net → 162.247.241.14:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops, ID=1005408417
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops (ID=1005408417)
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops, ID=432643320
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops (ID=432643320)
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops, ID=4148334522
+[2026-03-01 21:43:53] INFO: Built inbound tunnel with 1 hops (ID=4148334522)
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops, ID=3632258261
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops (ID=3632258261)
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops, ID=1776005488
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops (ID=1776005488)
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops, ID=3291353473
+[2026-03-01 21:43:53] INFO: Built outbound tunnel with 1 hops (ID=3291353473)
+[2026-03-01 21:44:15] INFO: [PROXY] 127.0.0.1:49426 → alive.github.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:15] INFO: [DNS] alive.github.com → 140.82.112.26:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:15] INFO: [PROXY] 127.0.0.1:49428 → alive.github.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:15] INFO: [DNS] alive.github.com → 140.82.112.26:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:16] INFO: [PROXY] 127.0.0.1:49432 → github.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:16] INFO: [DNS] github.com → 140.82.121.4:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:16] INFO: [PROXY] 127.0.0.1:49442 → alive.github.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:16] INFO: [DNS] alive.github.com → 140.82.112.26:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:21] INFO: [PROXY] 127.0.0.1:47856 → push.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:21] INFO: [DNS] push.services.mozilla.com → 34.107.243.93:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:21] INFO: [PROXY] 127.0.0.1:47860 → push.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:21] INFO: [DNS] push.services.mozilla.com → 34.107.243.93:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:21] INFO: [PROXY] 127.0.0.1:47870 → firefox.settings.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:44:21] INFO: [DNS] firefox.settings.services.mozilla.com → 151.101.129.91:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:44:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:45:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:46:19] INFO: [PROXY] 127.0.0.1:51190 → safebrowsing.googleapis.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:46:19] INFO: [DNS] safebrowsing.googleapis.com → 142.250.120.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:46:19] INFO: [PROXY] 127.0.0.1:51206 → o.pki.goog:80 [HTTP] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:46:19] WARN: [PROXY] ⚠ o.pki.goog uses plain HTTP — data NOT encrypted end-to-end (only DNS is protected via DoH)
+[2026-03-01 21:46:19] INFO: [DNS] o.pki.goog → 142.250.109.94:80 (resolved via DoH — no DNS leak)
+[2026-03-01 21:46:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:47:13] INFO: [PROXY] 127.0.0.1:53654 → bam.nr-data.net:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:47:13] INFO: [DNS] bam.nr-data.net → 162.247.241.14:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:47:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:48:45] INFO: [PROXY] 127.0.0.1:49518 → bam.nr-data.net:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:48:45] INFO: [DNS] bam.nr-data.net → 162.247.241.14:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:48:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:48:53] INFO: [PROXY] 127.0.0.1:36524 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:48:53] INFO: [DNS] signaler-pa.clients6.google.com → 142.251.98.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:48:53] INFO: [PROXY] 127.0.0.1:36526 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:48:53] INFO: [DNS] signaler-pa.clients6.google.com → 142.251.98.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:23] INFO: [PROXY] 127.0.0.1:59684 → alive.github.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:49:23] INFO: [DNS] alive.github.com → 140.82.112.25:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:27] INFO: [PROXY] 127.0.0.1:59694 → push.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:49:27] INFO: [DNS] push.services.mozilla.com → 34.107.243.93:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:27] INFO: [PROXY] 127.0.0.1:59700 → push.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:49:27] INFO: [DNS] push.services.mozilla.com → 34.107.243.93:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:27] INFO: [PROXY] 127.0.0.1:59714 → firefox.settings.services.mozilla.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:49:27] INFO: [DNS] firefox.settings.services.mozilla.com → 151.101.65.91:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:45] INFO: [PROXY] 127.0.0.1:58478 → bam.nr-data.net:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:49:45] INFO: [DNS] bam.nr-data.net → 162.247.243.29:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:49:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:50:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:51:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:52:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:52:58] INFO: [PROXY] 127.0.0.1:55568 → accounts.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:52:58] INFO: [DNS] accounts.google.com → 142.250.147.84:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:53:48] INFO: ── Status: Peers=2 | NetDB=1 | Tunnels: in=3 out=3 | Participating=0 ──
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops, ID=1183091551
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops (ID=1183091551)
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops, ID=951579178
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops (ID=951579178)
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops, ID=751724519
+[2026-03-01 21:53:53] INFO: Built inbound tunnel with 1 hops (ID=751724519)
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops, ID=195731210
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops (ID=195731210)
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops, ID=1038056958
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops (ID=1038056958)
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops, ID=1943738866
+[2026-03-01 21:53:53] INFO: Built outbound tunnel with 1 hops (ID=1943738866)
+[2026-03-01 21:53:59] INFO: [PROXY] 127.0.0.1:34820 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:53:59] INFO: [DNS] signaler-pa.clients6.google.com → 142.251.98.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:53:59] INFO: [PROXY] 127.0.0.1:34822 → signaler-pa.clients6.google.com:443 [HTTPS/TLS] [DNS:DoH] [Tunnel:active]
+[2026-03-01 21:53:59] INFO: [DNS] signaler-pa.clients6.google.com → 142.251.98.95:443 (resolved via DoH — no DNS leak)
+[2026-03-01 21:54:12] INFO: 
+[2026-03-01 21:54:12] INFO: Shutting down gracefully...
+[2026-03-01 21:54:22] WARN: Shutdown timed out, forcing exit

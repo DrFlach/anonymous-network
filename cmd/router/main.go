@@ -33,6 +33,7 @@ func main() {
 	floodfillFlag := flag.Bool("floodfill", false, "Enable floodfill mode")
 	noOutproxy := flag.Bool("no-outproxy", false, "Disable outproxy (exit node)")
 	verify := flag.Bool("verify", false, "Run encryption self-test and exit")
+	joinAddr := flag.String("join", "", "Connect to an existing peer (ip:port) to join the network")
 
 	flag.Parse()
 
@@ -144,14 +145,27 @@ func main() {
 	if *seeds != "" {
 		seedList = append(seedList, strings.Split(*seeds, ",")...)
 	}
+	if *joinAddr != "" {
+		seedList = append(seedList, *joinAddr)
+	}
+
+	// Clean seed list
+	var cleanSeeds []string
 	for _, seed := range seedList {
 		seed = strings.TrimSpace(seed)
-		if seed == "" {
-			continue
+		if seed != "" {
+			cleanSeeds = append(cleanSeeds, seed)
 		}
+	}
+
+	// Register seeds for auto-reconnection
+	transportMgr.SetSeeds(cleanSeeds)
+
+	for _, seed := range cleanSeeds {
 		logger.Info("Connecting to seed router: %s", seed)
 		if err := transportMgr.ConnectTo(seed); err != nil {
 			logger.Error("Failed to connect to seed %s: %v", seed, err)
+			logger.Info("Will auto-retry in background every 15 seconds")
 		}
 	}
 
@@ -199,9 +213,9 @@ func main() {
 	logger.Info("")
 	logger.Info("Shutting down gracefully...")
 
-	// Force exit after 5 seconds if graceful shutdown hangs
+	// Force exit after 10 seconds if graceful shutdown hangs
 	go func() {
-		time.Sleep(5 * time.Second)
+		time.Sleep(10 * time.Second)
 		logger.Warn("Shutdown timed out, forcing exit")
 		os.Exit(1)
 	}()
@@ -309,7 +323,8 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 		// Parse message
 		parsedMsg, err := router.Deserialize(msg.Data)
 		if err != nil {
-			logger.Error("Failed to parse message: %v", err)
+			// Silently skip short/invalid frames (e.g. raw heartbeats)
+			logger.Debug("Skipping unparseable message (%d bytes): %v", len(msg.Data), err)
 			continue
 		}
 

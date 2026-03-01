@@ -1,0 +1,26 @@
+{
+  "listen_address": "0.0.0.0",
+  "listen_port": 7656,
+  "seed_routers": [
+    "192.168.56.1:7656",
+    "192.168.56.101:7656"
+  ],
+  "router_info_file": "router.dat",
+  "identity_file": "identity.json",
+  "max_connections": 200,
+  "is_floodfill": true,
+  "tunnel_length": 3,
+  "tunnel_lifetime_seconds": 600,
+  "inbound_tunnels": 3,
+  "outbound_tunnels": 3,
+  "socks5_enabled": false,
+  "socks5_address": "127.0.0.1:4447",
+  "outproxy_enabled": true,
+  "dns_servers": [
+    "https://1.1.1.1/dns-query",
+    "https://dns.google/resolve",
+    "https://mozilla.cloudflare-dns.com/dns-query"
+  ],
+  "message_queue_size": 1000,
+  "log_level": "INFO"
+}
