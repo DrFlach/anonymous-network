@@ -1,125 +1,131 @@
 # Anonymous P2P Network
 
-Анонимная peer-to-peer сеть с луковой маршрутизацией, garlic-шифрованием и SOCKS5-прокси для безопасного анонимного доступа к интернету.
+An anonymous peer-to-peer network featuring onion routing, garlic encryption, and a SOCKS5 proxy for secure and private internet access.
 
-## Архитектура
+## Architecture
 
 ```
-┌─────────────┐     ┌──────────────────────────────────────────────┐
-│   Браузер   │────▶│  SOCKS5 Proxy (127.0.0.1:4447)              │
-│  (Firefox)  │     │                                              │
-└─────────────┘     │  ┌──────────────────────────────────────┐    │
-                    │  │  Tunnel Pool                         │    │
-                    │  │  ┌────────┐ ┌────────┐ ┌────────┐   │    │
-                    │  │  │Outbound│ │Outbound│ │Outbound│   │    │
-                    │  │  │Tunnel 1│ │Tunnel 2│ │Tunnel 3│   │    │
-                    │  │  └───┬────┘ └───┬────┘ └───┬────┘   │    │
-                    │  │      │          │          │         │    │
-                    │  │  [Onion Encryption - 3 layers]       │    │
-                    │  └──────┼──────────┼──────────┼─────────┘    │
-                    │         │          │          │               │
-                    │  ┌──────▼──────────▼──────────▼─────────┐    │
-                    │  │  Transport (NTCP2 Encrypted P2P)     │    │
-                    │  └──────────────────────────────────────┘    │
-                    │                                              │
-                    │  ┌──────────────────────────────────────┐    │
-                    │  │  NetDB + Floodfill DHT               │    │
-                    │  └──────────────────────────────────────┘    │
-                    │                                              │
-                    │  ┌──────────────────────────────────────┐    │
-                    │  │  Outproxy (Exit Node → Internet)     │    │
-                    │  │  + DNS-over-HTTPS (DoH)              │    │
-                    │  └──────────────────────────────────────┘    │
-                    └──────────────────────────────────────────────┘
++--------------+     +----------------------------------------------+
+|   Browser    |---->|  SOCKS5 Proxy (127.0.0.1:4447)              |
+|  (Firefox)   |     |                                              |
++--------------+     |  +--------------------------------------+    |
+                     |  |  Tunnel Pool                         |    |
+                     |  |  +--------+ +--------+ +--------+   |    |
+                     |  |  |Outbound| |Outbound| |Outbound|   |    |
+                     |  |  |Tunnel 1| |Tunnel 2| |Tunnel 3|   |    |
+                     |  |  +---+----+ +---+----+ +---+----+   |    |
+                     |  |      |          |          |         |    |
+                     |  |  [Onion Encryption - 3 layers]       |    |
+                     |  +------+----------+----------+---------+    |
+                     |         |          |          |               |
+                     |  +------v----------v----------v---------+    |
+                     |  |  Transport (NTCP2 Encrypted P2P)     |    |
+                     |  +--------------------------------------+    |
+                     |                                              |
+                     |  +--------------------------------------+    |
+                     |  |  NetDB + Floodfill DHT               |    |
+                     |  +--------------------------------------+    |
+                     |                                              |
+                     |  +--------------------------------------+    |
+                     |  |  Outproxy (Exit Node -> Internet)    |    |
+                     |  |  + DNS-over-HTTPS (DoH)              |    |
+                     |  +--------------------------------------+    |
+                     +----------------------------------------------+
 ```
 
-## Компоненты
+## Components
 
-### 🔐 Криптография (`pkg/crypto/`)
-- **Ed25519** — цифровые подписи (RouterInfo, сообщения)
-- **X25519** — обмен ключами Диффи-Хеллмана
-- **ChaCha20-Poly1305** — аутентифицированное шифрование (AEAD)
-- **HKDF** — деривация сессионных ключей
-- **Луковое шифрование** — многослойное шифрование для туннелей
-- **Персистентность ключей** — сохранение/загрузка идентификации с диска
+### Cryptography (`pkg/crypto/`)
+- **Ed25519** -- digital signatures (RouterInfo, messages)
+- **X25519** -- Diffie-Hellman key exchange
+- **ChaCha20-Poly1305** -- authenticated encryption (AEAD)
+- **HKDF** -- session key derivation
+- **Onion encryption** -- layered encryption for tunnels
+- **Key persistence** -- save/load identity to disk
 
-### 🌐 Транспорт (`pkg/transport/`)
-- **NTCP2-подобный протокол** — зашифрованные P2P соединения
-- **Noise handshake** — эфемерные DH ключи для perfect forward secrecy
-- **Управление пирами** — heartbeats, автоматическое отключение неактивных
+### Transport (`pkg/transport/`)
+- **NTCP2-like protocol** -- encrypted P2P connections
+- **Noise handshake** -- ephemeral DH keys for perfect forward secrecy
+- **Peer management** -- heartbeats, automatic disconnection of inactive peers
 
-### 🕳️ Туннели (`pkg/tunnel/`)
-- **Луковая маршрутизация** — данные шифруются слоями (каждый узел снимает один слой)
-- **Построение туннелей** — протокол создания через цепочку маршрутизаторов
-- **Пул туннелей** — автоматическое обслуживание inbound/outbound туннелей
-- **Участие в чужих туннелях** — маршрутизация данных для других пользователей
+### Tunnels (`pkg/tunnel/`)
+- **Onion routing** -- data is encrypted in layers (each node peels one layer)
+- **Tunnel building** -- build protocol through a chain of routers
+- **Tunnel pool** -- automatic maintenance of inbound/outbound tunnels
+- **Transit participation** -- routing data on behalf of other users
 
-### 🧄 Garlic Routing (`pkg/garlic/`)
-- **Garlic-сообщения** — пакетирование нескольких «зубчиков» (cloves) в одно сообщение
-- **Lease Sets** — публикация туннельных точек входа для назначений
+### Garlic Routing (`pkg/garlic/`)
+- **Garlic messages** -- bundling multiple cloves into a single message
+- **Lease Sets** -- publishing tunnel entry points for destinations
 
-### 🌍 Прокси (`pkg/proxy/`)
-- **SOCKS5 сервер** — подключение браузера через анонимную сеть
-- **Outproxy** — выходной узел для доступа к обычному интернету
-- **DNS-over-HTTPS** — безопасное разрешение DNS (Cloudflare, Google, Quad9)
+### Proxy (`pkg/proxy/`)
+- **SOCKS5 server** -- browser connection through the anonymous network
+- **Outproxy** -- exit node for accessing the regular internet
+- **DNS-over-HTTPS** -- secure DNS resolution (Cloudflare, Google, Mozilla)
 
-### 📡 NetDB (`pkg/netdb/`)
-- **RouterInfo** — информация о маршрутизаторах (адреса, ключи, возможности)
-- **Floodfill DHT** — распределённое хранение и распространение RouterInfo
-- **Peer Discovery** — обнаружение новых узлов в сети
+### NetDB (`pkg/netdb/`)
+- **RouterInfo** -- router metadata (addresses, keys, capabilities)
+- **Floodfill DHT** -- distributed storage and propagation of RouterInfo
+- **Peer discovery** -- finding new nodes in the network
 
-## Быстрый старт
+## Quick Start
 
-### Сборка
+### Build
 
 ```bash
 go build -o anon-router ./cmd/router/
 ```
 
-### Генерация идентификации
+### Generate Identity
 
 ```bash
 ./anon-router -keygen
 ```
 
-### Запуск роутера
+### Verify Encryption Subsystems
 
 ```bash
-# Базовый запуск (SOCKS5 на 127.0.0.1:4447)
+./anon-router -verify
+```
+
+### Run the Router
+
+```bash
+# Basic start (SOCKS5 on 127.0.0.1:4447)
 ./anon-router
 
-# С отладочными логами
+# With debug logging
 ./anon-router -debug
 
-# С подключением к seed-узлам
+# Connect to seed nodes
 ./anon-router -seeds "192.168.1.10:7656,192.168.1.11:7656"
 
-# Как floodfill-узел
+# As a floodfill node
 ./anon-router -floodfill
 
-# С кастомным SOCKS5 адресом
+# With a custom SOCKS5 address
 ./anon-router -socks 127.0.0.1:9050
 
-# Без выходного узла (только внутрисетевой трафик)
+# Without an exit node (internal network traffic only)
 ./anon-router -no-outproxy
 ```
 
-### Настройка браузера
+### Browser Configuration
 
 #### Firefox
-1. **Настройки** → **Сеть** → **Настроить...**
-2. Выбрать **Ручная настройка прокси**
+1. **Settings** > **Network Settings** > **Settings...**
+2. Select **Manual proxy configuration**
 3. **SOCKS Host:** `127.0.0.1`
 4. **Port:** `4447`
-5. Выбрать **SOCKS v5**
-6. ✅ **Проксировать DNS при использовании SOCKS v5** ← ВАЖНО!
+5. Select **SOCKS v5**
+6. Check **Proxy DNS when using SOCKS v5** (important)
 
-#### Chrome/Chromium
+#### Chrome / Chromium
 ```bash
 chromium --proxy-server="socks5://127.0.0.1:4447"
 ```
 
-## Конфигурация (config.json)
+## Configuration (config.json)
 
 ```json
 {
@@ -138,70 +144,70 @@ chromium --proxy-server="socks5://127.0.0.1:4447"
   "outproxy_enabled": true,
   "dns_servers": [
     "https://1.1.1.1/dns-query",
-    "https://dns.google/dns-query",
-    "https://dns.quad9.net/dns-query"
+    "https://dns.google/resolve",
+    "https://mozilla.cloudflare-dns.com/dns-query"
   ],
   "log_level": "INFO"
 }
 ```
 
-## Уровни безопасности
+## Security Layers
 
-| Уровень | Что защищает | Как |
-|---------|-------------|-----|
-| **Транспорт** | Данные между роутерами | ChaCha20-Poly1305 + X25519 ECDH |
-| **Туннели** | От анализа маршрута | Луковое шифрование (3+ слоя) |
-| **DNS** | От DNS-утечек | DNS-over-HTTPS (DoH) |
-| **Garlic** | Корреляция сообщений | Пакетирование + перешифрование |
-| **Perfect Forward Secrecy** | Прошлые сессии | Эфемерные ключи на каждое соединение |
+| Layer | Protects Against | Method |
+|-------|-----------------|--------|
+| **Transport** | Eavesdropping between routers | ChaCha20-Poly1305 + X25519 ECDH |
+| **Tunnels** | Traffic analysis | Onion encryption (3+ layers) |
+| **DNS** | DNS leaks | DNS-over-HTTPS (DoH) |
+| **Garlic** | Message correlation | Bundling + re-encryption |
+| **Perfect Forward Secrecy** | Compromise of past sessions | Ephemeral keys per connection |
 
-## Структура проекта
+## Project Structure
 
 ```
 cmd/
   router/
-    main.go              # Точка входа, интеграция компонентов
+    main.go              # Entry point, component integration
 pkg/
   crypto/
-    encrypt.go           # AEAD шифрование, луковое шифрование
-    identity.go          # Генерация RouterIdentity (Ed25519 + X25519)
-    persist.go           # Сохранение/загрузка ключей
+    encrypt.go           # AEAD encryption, onion encryption
+    identity.go          # RouterIdentity generation (Ed25519 + X25519)
+    persist.go           # Key save/load
   garlic/
-    garlic.go            # Garlic-сообщения и cloves
-    leaseset.go          # Lease Sets для назначений
+    garlic.go            # Garlic messages and cloves
+    leaseset.go          # Lease sets for destinations
   netdb/
-    floodfill.go         # DHT, распространение RouterInfo
-    routerinfo.go        # RouterInfo: адреса, ключи, подписи
-    store.go             # In-memory хранилище RouterInfo
+    floodfill.go         # DHT, RouterInfo propagation
+    routerinfo.go        # RouterInfo: addresses, keys, signatures
+    store.go             # In-memory RouterInfo store
   proxy/
-    outproxy.go          # Выходной узел (exit node)
-    resolver.go          # DNS-over-HTTPS резолвер
-    socks5.go            # SOCKS5 прокси-сервер
+    outproxy.go          # Exit node (outproxy)
+    resolver.go          # DNS-over-HTTPS resolver
+    socks5.go            # SOCKS5 proxy server
   router/
-    message.go           # Протокольные сообщения
+    message.go           # Protocol messages
   transport/
-    manager.go           # Управление P2P соединениями
+    manager.go           # P2P connection management
     ntcp2/
-      conn.go            # Зашифрованные соединения
-      handshake.go       # Noise-подобный handshake
+      conn.go            # Encrypted connections
+      handshake.go       # Noise-like handshake
   tunnel/
-    build.go             # Протокол построения туннелей
-    pool.go              # Пул туннелей (auto-management)
-    tunnel.go            # Структуры туннелей, участие в маршрутизации
+    build.go             # Tunnel build protocol
+    pool.go              # Tunnel pool (auto-management)
+    tunnel.go            # Tunnel structures, transit participation
   util/
-    config.go            # Конфигурация
-    logger.go            # Логирование
+    config.go            # Configuration
+    logger.go            # Logging
 ```
 
-## Принцип работы анонимизации
+## How Anonymization Works
 
-1. **Браузер** подключается к локальному SOCKS5-прокси (`127.0.0.1:4447`)
-2. Запрос шифруется **3 слоями** (по одному на каждый хоп в туннеле)
-3. Каждый промежуточный узел снимает **только свой слой** шифрования
-4. Ни один узел не знает одновременно **отправителя** и **получателя**
-5. **Выходной узел** (outproxy) подключается к целевому серверу
-6. **DNS** разрешается через **DNS-over-HTTPS**, предотвращая утечки
+1. The **browser** connects to the local SOCKS5 proxy (`127.0.0.1:4447`).
+2. The request is encrypted with **3 layers** (one per hop in the tunnel).
+3. Each intermediate node peels **only its own layer** of encryption.
+4. No single node knows both the **sender** and the **destination**.
+5. The **exit node** (outproxy) connects to the target server.
+6. **DNS** is resolved via **DNS-over-HTTPS**, preventing leaks.
 
-## Лицензия
+## License
 
 MIT
