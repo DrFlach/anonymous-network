@@ -3,9 +3,11 @@ identity.json
 
 # Runtime files
 anon-router
+anon-router-linux
 router.dat
 router.log
 *.log
+*.tar.gz
 
 # OS
 .DS_Store

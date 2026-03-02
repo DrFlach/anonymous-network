@@ -42,6 +42,15 @@ type Manager struct {
     // Our listen port for self-announcement
     listenPort int
 
+    // Detected external (public) IP from VPS (STUN-like)
+    externalIP   string
+    externalIPMu sync.RWMutex
+
+    // Known nodes: all addresses ever learned (including unreachable)
+    // This tracks the full network size, not just direct connections
+    knownNodes   map[string]time.Time
+    knownNodesMu sync.RWMutex
+
     // Auto-reconnect to seeds
     seedAddrs []string
     seedMu    sync.Mutex
@@ -60,6 +69,7 @@ func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
         identity:    identity,
         peers:       make(map[[32]byte]*PeerConnection),
         peersByAddr: make(map[string]*PeerConnection),
+        knownNodes:  make(map[string]time.Time),
         maxPeers:    maxPeers,
         logger:      util.GetLogger(),
         incomingMsg: make(chan *IncomingMessage, 1000),
@@ -203,6 +213,9 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 
+    // Tell the remote peer what their external IP looks like to us (STUN-like)
+    m.sendYourIP(peer)
+
     // Announce our listen addresses and share known peers
     m.announceSelf(peer)
     m.sendPeerList(peer)
@@ -278,6 +291,9 @@ func (m *Manager) ConnectTo(address string) error {
     m.mu.Unlock()
 
     m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
+
+    // Tell the remote peer what their external IP looks like to us (STUN-like)
+    m.sendYourIP(peer)
 
     // Announce our listen addresses and share known peers
     m.announceSelf(peer)
@@ -427,16 +443,16 @@ func (m *Manager) SendTo(routerHash [32]byte, data []byte) error {
     peer, exists := m.peers[routerHash]
     m.mu.RUnlock()
     
-    if !exists {
-        return fmt.Errorf("peer not connected")
+    if exists {
+        if err := peer.Conn.SendFrame(data); err != nil {
+            return fmt.Errorf("failed to send to peer: %w", err)
+        }
+        peer.LastActivity = time.Now()
+        return nil
     }
     
-    if err := peer.Conn.SendFrame(data); err != nil {
-        return fmt.Errorf("failed to send to peer: %w", err)
-    }
-    
-    peer.LastActivity = time.Now()
-    return nil
+    // No direct connection — try relay through any connected peer
+    return m.relaySend(routerHash, data)
 }
 
 // SendToAddress sends data to a peer by address
@@ -580,6 +596,26 @@ func (m *Manager) getLocalListenAddrs() []string {
 // announceSelf sends our own listen addresses to a peer (prefixed with @ to distinguish from peer sharing)
 func (m *Manager) announceSelf(peer *PeerConnection) {
     ownAddrs := m.getLocalListenAddrs()
+
+    // Also include our detected external IP if we have one
+    m.externalIPMu.RLock()
+    extIP := m.externalIP
+    m.externalIPMu.RUnlock()
+    if extIP != "" && m.listenPort > 0 {
+        extAddr := fmt.Sprintf("%s:%d", extIP, m.listenPort)
+        // Avoid duplicates
+        found := false
+        for _, a := range ownAddrs {
+            if a == extAddr {
+                found = true
+                break
+            }
+        }
+        if !found {
+            ownAddrs = append(ownAddrs, extAddr)
+        }
+    }
+
     if len(ownAddrs) == 0 {
         return
     }
@@ -658,12 +694,15 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
                 }
                 if !found {
                     peer.ListenAddrs = append(peer.ListenAddrs, listenAddr)
-                    m.logger.Debug("Peer %s announced listen addr: %s", peer.Address, listenAddr)
+                    m.logger.Info("Peer %s announced listen addr: %s", peer.Address, listenAddr)
                 }
             }
             m.mu.Unlock()
+            // Track in known nodes
+            m.trackKnownNode(listenAddr)
         } else {
-            // Peer address to try connecting to
+            // Peer address to try connecting to — also track it
+            m.trackKnownNode(part)
             m.tryConnectToPeer(part)
         }
     }
@@ -742,6 +781,221 @@ func (m *Manager) peerExchangeLoop() {
             }
         }
     }
+}
+
+// ─── External IP discovery (STUN-like) ────────────────────────────────────────
+
+// sendYourIP tells a connecting peer what their external IP address is.
+// This acts like a simple STUN — the peer can then announce this public IP
+// so that nodes from other networks can connect to it.
+func (m *Manager) sendYourIP(peer *PeerConnection) {
+    remoteAddr := peer.Conn.RemoteAddr()
+    if remoteAddr == nil {
+        return
+    }
+    host, _, err := net.SplitHostPort(remoteAddr.String())
+    if err != nil {
+        return
+    }
+    // Only send if it looks like a real external IP (not loopback or link-local)
+    ip := net.ParseIP(host)
+    if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+        return
+    }
+    msg := router.NewMessage(router.MsgTypeYourIP, []byte(host))
+    data, err := msg.Serialize()
+    if err != nil {
+        return
+    }
+    if err := peer.Conn.SendFrame(data); err != nil {
+        m.logger.Debug("Failed to send YourIP to %s: %v", peer.Address, err)
+    } else {
+        m.logger.Debug("Sent YourIP=%s to %s", host, peer.Address)
+    }
+}
+
+// HandleYourIP processes an external IP notification from a peer (VPS tells us our public IP)
+func (m *Manager) HandleYourIP(payload []byte) {
+    if len(payload) == 0 {
+        return
+    }
+    ipStr := strings.TrimSpace(string(payload))
+    ip := net.ParseIP(ipStr)
+    if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+        return // only accept real public IPs
+    }
+
+    m.externalIPMu.Lock()
+    old := m.externalIP
+    m.externalIP = ipStr
+    m.externalIPMu.Unlock()
+
+    if old != ipStr {
+        m.logger.Info("Discovered external IP: %s (reported by peer)", ipStr)
+        // Re-announce to all peers with the new external IP
+        m.mu.RLock()
+        peers := make([]*PeerConnection, 0, len(m.peers))
+        for _, p := range m.peers {
+            peers = append(peers, p)
+        }
+        m.mu.RUnlock()
+        for _, p := range peers {
+            m.announceSelf(p)
+        }
+    }
+}
+
+// ─── Relay forwarding ─────────────────────────────────────────────────────────
+
+// relaySend wraps a message in MsgTypeRelayRequest and sends through any connected peer.
+// Format: destHash(32) + originalData
+func (m *Manager) relaySend(destHash [32]byte, data []byte) error {
+    relayPayload := make([]byte, 32+len(data))
+    copy(relayPayload[:32], destHash[:])
+    copy(relayPayload[32:], data)
+
+    relayMsg := router.NewMessage(router.MsgTypeRelayRequest, relayPayload)
+    relayData, err := relayMsg.Serialize()
+    if err != nil {
+        return fmt.Errorf("relay serialize: %w", err)
+    }
+
+    // Try to send through any connected peer (prefer seeds / floodfill)
+    m.mu.RLock()
+    var relayPeer *PeerConnection
+    for _, p := range m.peers {
+        relayPeer = p
+        break // pick first available; TODO: prefer floodfill
+    }
+    m.mu.RUnlock()
+
+    if relayPeer == nil {
+        return fmt.Errorf("no peers available for relay")
+    }
+
+    m.logger.Debug("Relay send to %x via %s", destHash[:8], relayPeer.Address)
+    return relayPeer.Conn.SendFrame(relayData)
+}
+
+// HandleRelayRequest processes an incoming relay request.
+// A peer asks us to forward a message to destHash.
+// Format: destHash(32) + innerData
+func (m *Manager) HandleRelayRequest(from [32]byte, payload []byte) {
+    if len(payload) < 33 { // at least 32-byte hash + 1 byte data
+        return
+    }
+
+    var destHash [32]byte
+    copy(destHash[:], payload[:32])
+    innerData := payload[32:]
+
+    // Check if we have a direct connection to the destination
+    m.mu.RLock()
+    destPeer, exists := m.peers[destHash]
+    m.mu.RUnlock()
+
+    if !exists {
+        m.logger.Debug("Relay: destination %x not connected, dropping", destHash[:8])
+        return
+    }
+
+    // Build MsgTypeRelayResponse for the destination: srcHash(32) + innerData
+    responsePayload := make([]byte, 32+len(innerData))
+    copy(responsePayload[:32], from[:])
+    copy(responsePayload[32:], innerData)
+
+    responseMsg := router.NewMessage(router.MsgTypeRelayResponse, responsePayload)
+    responseData, err := responseMsg.Serialize()
+    if err != nil {
+        return
+    }
+
+    if err := destPeer.Conn.SendFrame(responseData); err != nil {
+        m.logger.Debug("Relay forward to %x failed: %v", destHash[:8], err)
+    } else {
+        m.logger.Info("Relayed %d bytes: %x → %x", len(innerData), from[:8], destHash[:8])
+    }
+}
+
+// HandleRelayResponse processes a relayed message that was forwarded to us.
+// Format: srcHash(32) + innerData
+// We re-inject the innerData as if it came from srcHash.
+func (m *Manager) HandleRelayResponse(payload []byte) {
+    if len(payload) < 33 {
+        return
+    }
+
+    var srcHash [32]byte
+    copy(srcHash[:], payload[:32])
+    innerData := payload[32:]
+
+    m.logger.Debug("Received relayed message from %x (%d bytes)", srcHash[:8], len(innerData))
+
+    // Inject into incoming message queue as if from srcHash
+    msg := &IncomingMessage{
+        From:       srcHash,
+        Data:       innerData,
+        ReceivedAt: time.Now(),
+    }
+
+    select {
+    case m.incomingMsg <- msg:
+    default:
+        m.logger.Warn("Incoming queue full, dropping relayed message from %x", srcHash[:8])
+    }
+}
+
+// HasPeer checks if we have a direct connection to a router hash
+func (m *Manager) HasPeer(routerHash [32]byte) bool {
+    m.mu.RLock()
+    defer m.mu.RUnlock()
+    _, exists := m.peers[routerHash]
+    return exists
+}
+
+// ─── Known nodes tracking ─────────────────────────────────────────────────────
+
+// trackKnownNode adds an address to the known nodes map
+func (m *Manager) trackKnownNode(addr string) {
+    if addr == "" {
+        return
+    }
+    // Skip loopback
+    if h, _, err := net.SplitHostPort(addr); err == nil {
+        if h == "127.0.0.1" || h == "::1" {
+            return
+        }
+    }
+    m.knownNodesMu.Lock()
+    m.knownNodes[addr] = time.Now()
+    m.knownNodesMu.Unlock()
+}
+
+// GetKnownNodeCount returns the number of unique known nodes in the network
+func (m *Manager) GetKnownNodeCount() int {
+    m.knownNodesMu.RLock()
+    defer m.knownNodesMu.RUnlock()
+    // Deduplicate by host IP (different ports on same host = same node)
+    hosts := make(map[string]bool)
+    for addr := range m.knownNodes {
+        if h, _, err := net.SplitHostPort(addr); err == nil {
+            hosts[h] = true
+        } else {
+            hosts[addr] = true
+        }
+    }
+    return len(hosts)
+}
+
+// GetKnownNodes returns all known node addresses
+func (m *Manager) GetKnownNodes() []string {
+    m.knownNodesMu.RLock()
+    defer m.knownNodesMu.RUnlock()
+    addrs := make([]string, 0, len(m.knownNodes))
+    for addr := range m.knownNodes {
+        addrs = append(addrs, addr)
+    }
+    return addrs
 }
 
 // Stop stops the transport manager

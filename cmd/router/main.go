@@ -366,6 +366,18 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 			logger.Debug("Received peer list from %x (%d bytes)", msg.From[:8], len(parsedMsg.Payload))
 			transportMgr.HandlePeerList(msg.From, parsedMsg.Payload)
 
+		case router.MsgTypeRelayRequest:
+			// Someone asks us to relay a message to another peer
+			transportMgr.HandleRelayRequest(msg.From, parsedMsg.Payload)
+
+		case router.MsgTypeRelayResponse:
+			// A relayed message has been delivered to us
+			transportMgr.HandleRelayResponse(parsedMsg.Payload)
+
+		case router.MsgTypeYourIP:
+			// A peer tells us our external IP (STUN-like)
+			transportMgr.HandleYourIP(parsedMsg.Payload)
+
 		default:
 			logger.Debug("Unknown message type: %d", parsedMsg.Type)
 		}
@@ -462,11 +474,12 @@ func statusReporter(transportMgr *transport.Manager, tunnelPool *tunnel.Pool, ne
 			return
 		case <-ticker.C:
 			peerCount := transportMgr.GetPeerCount()
+			knownNodes := transportMgr.GetKnownNodeCount()
 			routerCount := netDB.Count()
 			inTunnels, outTunnels, participations := tunnelPool.Stats()
 
-			logger.Info("── Status: Peers=%d | NetDB=%d | Tunnels: in=%d out=%d | Participating=%d ──",
-				peerCount, routerCount, inTunnels, outTunnels, participations)
+			logger.Info("── Status: Peers=%d | Known nodes=%d | NetDB=%d | Tunnels: in=%d out=%d | Participating=%d ──",
+				peerCount, knownNodes, routerCount, inTunnels, outTunnels, participations)
 		}
 	}
 }

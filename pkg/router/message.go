@@ -21,6 +21,9 @@ const (
     MsgTypeTunnelData
     MsgTypeDeliveryStatus
     MsgTypePeerList
+	MsgTypeRelayRequest  // relay a message through an intermediary to destHash
+	MsgTypeRelayResponse // relayed message delivered from srcHash
+	MsgTypeYourIP        // server tells connecting client its external IP
 )
 
 // Message represents a network protocol message
