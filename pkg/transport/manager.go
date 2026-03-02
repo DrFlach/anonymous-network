@@ -108,10 +108,24 @@ func (m *Manager) Start(listenAddr string) error {
                 m.logger.Info("UPnP: not available (%v) — peers behind NAT will use relay", err)
             } else {
                 m.upnpActive = true
-                // Use UPnP-discovered external IP
+                // Use UPnP-discovered external IP only if it's truly public.
+                // Don't overwrite a peer-reported public IP with a CGNAT/private one
+                // (e.g. UPnP might return 10.5.124.75 from CGNAT while peer reported 31.x.x.x)
                 if extIP := m.upnp.GetExternalIP(); extIP != "" {
+                    ip := net.ParseIP(extIP)
+                    isPublic := ip != nil && !ip.IsPrivate() && !ip.IsLoopback()
+                    // Also check CGNAT (100.64.0.0/10)
+                    if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+                        isPublic = false
+                    }
+
                     m.externalIPMu.Lock()
-                    m.externalIP = extIP
+                    if isPublic {
+                        m.externalIP = extIP
+                    } else if m.externalIP == "" {
+                        // Only use non-public UPnP IP if we have nothing better
+                        m.externalIP = extIP
+                    }
                     m.externalIPMu.Unlock()
                     m.logger.Info("UPnP: external IP %s, port %d forwarded — direct connections enabled!", extIP, m.listenPort)
                     // Re-announce to all peers with the new external IP
@@ -601,6 +615,39 @@ func (m *Manager) checkConnections() {
     }
 }
 
+// sameSubnet24 checks if two IPv4 addresses are on the same /24 subnet
+func sameSubnet24(a, b net.IP) bool {
+	a4 := a.To4()
+	b4 := b.To4()
+	if a4 == nil || b4 == nil {
+		return false
+	}
+	return a4[0] == b4[0] && a4[1] == b4[1] && a4[2] == b4[2]
+}
+
+// peerKnownIPs returns all IP addresses associated with a peer:
+// the TCP connection address + all self-announced ListenAddrs.
+// This is needed because a peer behind NAT has a public TCP address
+// but announces private LAN addresses — both should be checked for subnet matching.
+func peerKnownIPs(peer *PeerConnection) []net.IP {
+	var ips []net.IP
+	// TCP connection address
+	if h, _, err := net.SplitHostPort(peer.Address); err == nil {
+		if ip := net.ParseIP(h); ip != nil {
+			ips = append(ips, ip)
+		}
+	}
+	// Self-announced listen addresses
+	for _, la := range peer.ListenAddrs {
+		if h, _, err := net.SplitHostPort(la); err == nil {
+			if ip := net.ParseIP(h); ip != nil {
+				ips = append(ips, ip)
+			}
+		}
+	}
+	return ips
+}
+
 // getLocalListenAddrs returns our own reachable listen addresses (all non-loopback IPs + listen port)
 func (m *Manager) getLocalListenAddrs() []string {
     if m.listenPort == 0 {
@@ -654,12 +701,10 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
         }
     }
 
-    // Determine peer's subnet to filter private IPs
-    peerHost := ""
-    if h, _, err := net.SplitHostPort(peer.Address); err == nil {
-        peerHost = h
-    }
-    peerIP := net.ParseIP(peerHost)
+    // Collect all known IPs of the peer (TCP addr + announced ListenAddrs)
+    // This is critical: a peer behind NAT has a public TCP address but may
+    // have announced a private LAN address like 192.168.18.23 — we need both.
+    peerIPs := peerKnownIPs(peer)
 
     var reachableAddrs []string
     for _, a := range allAddrs {
@@ -676,10 +721,11 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
             reachableAddrs = append(reachableAddrs, a)
             continue
         }
-        // Private IP — only announce to peers on the same /24 subnet
-        if peerIP != nil && ip.To4() != nil && peerIP.To4() != nil {
-            if ip.To4()[0] == peerIP.To4()[0] && ip.To4()[1] == peerIP.To4()[1] && ip.To4()[2] == peerIP.To4()[2] {
+        // Private IP — announce if peer has ANY address on the same /24 subnet
+        for _, pip := range peerIPs {
+            if sameSubnet24(ip, pip) {
                 reachableAddrs = append(reachableAddrs, a)
+                break
             }
         }
     }
@@ -706,12 +752,10 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
 // Only shares public IPs and same-subnet private IPs to avoid sharing
 // unreachable addresses (e.g. VirtualBox host-only, GCP internal IPs).
 func (m *Manager) sendPeerList(target *PeerConnection) {
-    // Determine target's network to decide what's shareable
-    targetHost := ""
-    if h, _, err := net.SplitHostPort(target.Address); err == nil {
-        targetHost = h
-    }
-    targetIP := net.ParseIP(targetHost)
+    // Collect ALL known IPs of the target (TCP addr + self-announced addrs).
+    // A peer behind NAT has TCP addr like 31.183.185.13:xxxxx but may have
+    // announced 192.168.18.8:7656 — we need to check BOTH for subnet matching.
+    targetIPs := peerKnownIPs(target)
 
     m.mu.RLock()
     var addrs []string
@@ -738,11 +782,15 @@ func (m *Manager) sendPeerList(target *PeerConnection) {
                 addrs = append(addrs, la)
                 continue
             }
-            // Private IP — only share if target is on the same /24 subnet
-            if targetIP != nil && ip.To4() != nil && targetIP.To4() != nil {
-                if ip.To4()[0] == targetIP.To4()[0] && ip.To4()[1] == targetIP.To4()[1] && ip.To4()[2] == targetIP.To4()[2] {
+            // Private IP — share if target has ANY address on the same /24 subnet.
+            // This is the key fix: VPS sees Laptop1 as 31.183.185.13 (NAT) but
+            // Laptop1 also announced 192.168.18.8 — so we can match it with
+            // Laptop2's 192.168.18.23 and share them with each other.
+            for _, tip := range targetIPs {
+                if sameSubnet24(ip, tip) {
                     seen[la] = true
                     addrs = append(addrs, la)
+                    break
                 }
             }
         }
@@ -844,11 +892,8 @@ func (m *Manager) isReachableAddr(addr string) bool {
         if ourIP == nil {
             continue
         }
-        // Same /24 for simplicity (covers most LANs)
-        if ip.To4() != nil && ourIP.To4() != nil {
-            if ip.To4()[0] == ourIP.To4()[0] && ip.To4()[1] == ourIP.To4()[1] && ip.To4()[2] == ourIP.To4()[2] {
-                return true
-            }
+        if sameSubnet24(ip, ourIP) {
+            return true
         }
     }
     return false
@@ -867,9 +912,24 @@ func (m *Manager) tryConnectToPeer(addr string) {
         addrHost = h
     }
 
-    // Skip our own addresses
+    // Skip our own addresses (local interfaces)
     for _, ownAddr := range m.getLocalListenAddrs() {
         if ownAddr == addr {
+            return
+        }
+    }
+    // Skip our own external IP (we see it via STUN-like YourIP messages)
+    m.externalIPMu.RLock()
+    extIP := m.externalIP
+    m.externalIPMu.RUnlock()
+    if extIP != "" && addrHost == extIP {
+        return
+    }
+    // Also skip UPnP-discovered external IP
+    if m.upnp != nil {
+        upnpIP := m.upnp.GetExternalIP()
+        if upnpIP != "" && addrHost == upnpIP {
+            m.logger.Debug("Peer exchange: skipping own UPnP IP %s", addr)
             return
         }
     }
