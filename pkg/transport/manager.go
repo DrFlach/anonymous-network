@@ -831,6 +831,7 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
         if strings.HasPrefix(part, "@") {
             // Self-announcement: store as the sender's listen address
             listenAddr := strings.TrimPrefix(part, "@")
+            isNew := false
             m.mu.Lock()
             if peer, ok := m.peers[from]; ok {
                 found := false
@@ -843,11 +844,28 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
                 if !found {
                     peer.ListenAddrs = append(peer.ListenAddrs, listenAddr)
                     m.logger.Info("Peer %s announced listen addr: %s", peer.Address, listenAddr)
+                    isNew = true
                 }
             }
             m.mu.Unlock()
             // Track in known nodes
             m.trackKnownNode(listenAddr)
+            // When a peer announces a new address, immediately send updated peer lists
+            // to ALL peers. This fixes the timing issue: when Laptop2 connects to VPS
+            // and announces @192.168.18.23, VPS now knows Laptop1 (192.168.18.8) and
+            // Laptop2 (192.168.18.23) are on the same subnet — so it shares them immediately
+            // instead of waiting up to 60s for the next peer exchange cycle.
+            if isNew {
+                m.mu.RLock()
+                allPeers := make([]*PeerConnection, 0, len(m.peers))
+                for _, p := range m.peers {
+                    allPeers = append(allPeers, p)
+                }
+                m.mu.RUnlock()
+                for _, p := range allPeers {
+                    m.sendPeerList(p)
+                }
+            }
         } else {
             // Peer address to try connecting to — also track it
             m.trackKnownNode(part)

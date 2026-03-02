@@ -66,7 +66,8 @@ func (u *UPnPManager) ForwardPort(port int) error {
 		u.logger.Info("UPnP: External IP is %s", extIP)
 	}
 
-	// Step 4: Add port mapping
+	// Step 4: Add port mapping (delete any existing mapping first to avoid error 718)
+	_ = u.deletePortMapping(port) // ignore error — may not exist
 	if err := u.addPortMapping(port, localIP); err != nil {
 		return fmt.Errorf("UPnP port mapping failed: %w", err)
 	}
