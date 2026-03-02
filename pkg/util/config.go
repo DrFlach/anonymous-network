@@ -38,6 +38,9 @@ type Config struct {
     // Performance
     MessageQueueSize  int `json:"message_queue_size"`
     
+    // UPnP auto port forwarding
+    DisableUPnP       bool `json:"disable_upnp,omitempty"`
+    
     // Logging
     LogLevel          string `json:"log_level"`
 }

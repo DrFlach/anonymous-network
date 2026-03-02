@@ -54,6 +54,10 @@ type Manager struct {
     // Auto-reconnect to seeds
     seedAddrs []string
     seedMu    sync.Mutex
+
+    // UPnP auto port forwarding
+    upnp       *UPnPManager
+    upnpActive bool
 }
 
 // IncomingMessage represents a message received from a peer
@@ -84,11 +88,45 @@ func (m *Manager) SetSeeds(seeds []string) {
     m.seedAddrs = seeds
 }
 
+// EnableUPnP enables automatic port forwarding via UPnP.
+// Call this before Start() to have the port opened automatically.
+func (m *Manager) EnableUPnP() {
+    m.upnp = NewUPnPManager()
+}
+
 // Start starts the transport manager and listens for connections
 func (m *Manager) Start(listenAddr string) error {
     // Extract listen port for self-announcement
     if _, portStr, err := net.SplitHostPort(listenAddr); err == nil {
         fmt.Sscanf(portStr, "%d", &m.listenPort)
+    }
+
+    // Try UPnP port forwarding in background (don't delay startup)
+    if m.upnp != nil && m.listenPort > 0 {
+        go func() {
+            if err := m.upnp.ForwardPort(m.listenPort); err != nil {
+                m.logger.Info("UPnP: not available (%v) — peers behind NAT will use relay", err)
+            } else {
+                m.upnpActive = true
+                // Use UPnP-discovered external IP
+                if extIP := m.upnp.GetExternalIP(); extIP != "" {
+                    m.externalIPMu.Lock()
+                    m.externalIP = extIP
+                    m.externalIPMu.Unlock()
+                    m.logger.Info("UPnP: external IP %s, port %d forwarded — direct connections enabled!", extIP, m.listenPort)
+                    // Re-announce to all peers with the new external IP
+                    m.mu.RLock()
+                    peers := make([]*PeerConnection, 0, len(m.peers))
+                    for _, p := range m.peers {
+                        peers = append(peers, p)
+                    }
+                    m.mu.RUnlock()
+                    for _, p := range peers {
+                        m.announceSelf(p)
+                    }
+                }
+            }
+        }()
     }
 
     lc := net.ListenConfig{
@@ -1109,6 +1147,11 @@ func (m *Manager) Stop() {
     m.logger.Info("Stopping transport manager...")
     
     close(m.stopChan)
+    
+    // Remove UPnP port forwarding
+    if m.upnpActive && m.upnp != nil {
+        m.upnp.ClearPort()
+    }
     
     if m.listener != nil {
         m.listener.Close()

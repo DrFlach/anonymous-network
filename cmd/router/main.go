@@ -32,6 +32,7 @@ func main() {
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	floodfillFlag := flag.Bool("floodfill", false, "Enable floodfill mode")
 	noOutproxy := flag.Bool("no-outproxy", false, "Disable outproxy (exit node)")
+	noUPnP := flag.Bool("no-upnp", false, "Disable UPnP auto port forwarding")
 	verify := flag.Bool("verify", false, "Run encryption self-test and exit")
 	joinAddr := flag.String("join", "", "Connect to an existing peer (ip:port) to join the network")
 
@@ -109,6 +110,11 @@ func main() {
 
 	// Create transport manager
 	transportMgr := transport.NewManager(identity, config.MaxConnections)
+
+	// Enable UPnP auto port forwarding (unless disabled)
+	if !*noUPnP && !config.DisableUPnP {
+		transportMgr.EnableUPnP()
+	}
 
 	// Create tunnel pool
 	tunnelConfig := &tunnel.PoolConfig{
