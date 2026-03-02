@@ -653,6 +653,37 @@ func peerKnownIPs(peer *PeerConnection) []net.IP {
 	return ips
 }
 
+// isShareableAddr checks if an address should be shared with a target peer.
+// Public addresses are always shareable. Private addresses are shareable only if
+// the target has an address on the same /24 subnet.
+func isShareableAddr(addr string, targetIPs []net.IP) bool {
+    h, _, err := net.SplitHostPort(addr)
+    if err != nil {
+        return false
+    }
+    ip := net.ParseIP(h)
+    if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+        return false
+    }
+    // Filter CGNAT range (100.64.0.0/10)
+    if ip4 := ip.To4(); ip4 != nil {
+        if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+            return false
+        }
+    }
+    // Public IP — always share
+    if !ip.IsPrivate() {
+        return true
+    }
+    // Private IP — share only if target is on same /24 subnet
+    for _, tip := range targetIPs {
+        if sameSubnet24(ip, tip) {
+            return true
+        }
+    }
+    return false
+}
+
 // getLocalListenAddrs returns our own reachable listen addresses (all non-loopback IPs + listen port)
 func (m *Manager) getLocalListenAddrs() []string {
     if m.listenPort == 0 {
@@ -743,53 +774,76 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
 }
 
 // sendPeerList sends known peer listen addresses to a specific peer.
-// Only shares public IPs and same-subnet private IPs to avoid sharing
-// unreachable addresses (e.g. VirtualBox host-only, GCP internal IPs).
+// Shares addresses from two sources:
+// 1. ListenAddrs of directly connected peers
+// 2. Global knownNodes for multi-hop gossip propagation
+// This ensures transitive discovery: if A knows B and C, and E connects to A,
+// E learns about B and C. When F connects to E, F also learns about B and C.
 func (m *Manager) sendPeerList(target *PeerConnection) {
-    // Collect ALL known IPs of the target (TCP addr + self-announced addrs).
-    // A peer behind NAT has TCP addr like 31.183.185.13:xxxxx but may have
-    // announced 192.168.18.8:7656 — we need to check BOTH for subnet matching.
     targetIPs := peerKnownIPs(target)
 
-    m.mu.RLock()
-    var addrs []string
+    // Build set of target's own addresses to avoid sending them back
+    targetAddrs := make(map[string]bool)
+    for _, la := range target.ListenAddrs {
+        targetAddrs[la] = true
+    }
+
+    // Build set of our own addresses to avoid sending
+    ownAddrs := make(map[string]bool)
+    for _, a := range m.getLocalListenAddrs() {
+        ownAddrs[a] = true
+    }
+    m.externalIPMu.RLock()
+    if m.externalIP != "" && m.listenPort > 0 {
+        ownAddrs[fmt.Sprintf("%s:%d", m.externalIP, m.listenPort)] = true
+    }
+    m.externalIPMu.RUnlock()
+    if m.upnp != nil {
+        if upnpIP := m.upnp.GetExternalIP(); upnpIP != "" && m.listenPort > 0 {
+            ownAddrs[fmt.Sprintf("%s:%d", upnpIP, m.listenPort)] = true
+        }
+    }
+
     seen := make(map[string]bool)
+    var addrs []string
+
+    // 1. Collect from directly connected peers' ListenAddrs
+    m.mu.RLock()
     for _, p := range m.peers {
         if p.RouterHash == target.RouterHash {
             continue
         }
         for _, la := range p.ListenAddrs {
-            if seen[la] {
+            if seen[la] || targetAddrs[la] || ownAddrs[la] {
                 continue
             }
-            h, _, err := net.SplitHostPort(la)
-            if err != nil {
-                continue
-            }
-            ip := net.ParseIP(h)
-            if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
-                continue
-            }
-            // Public IP — always share
-            if !ip.IsPrivate() {
+            if isShareableAddr(la, targetIPs) {
                 seen[la] = true
                 addrs = append(addrs, la)
-                continue
-            }
-            // Private IP — share if target has ANY address on the same /24 subnet.
-            // This is the key fix: VPS sees Laptop1 as 31.183.185.13 (NAT) but
-            // Laptop1 also announced 192.168.18.8 — so we can match it with
-            // Laptop2's 192.168.18.23 and share them with each other.
-            for _, tip := range targetIPs {
-                if sameSubnet24(ip, tip) {
-                    seen[la] = true
-                    addrs = append(addrs, la)
-                    break
-                }
             }
         }
     }
     m.mu.RUnlock()
+
+    // 2. Collect from global network knowledge (multi-hop gossip)
+    // This ensures addresses learned from peer exchange propagate transitively:
+    // if A told us about B, we share B's address with all our peers,
+    // even if we never connected to B ourselves.
+    m.knownNodesMu.RLock()
+    for addr, lastSeen := range m.knownNodes {
+        if seen[addr] || targetAddrs[addr] || ownAddrs[addr] {
+            continue
+        }
+        // TTL: don't share stale addresses (older than 30 minutes)
+        if time.Since(lastSeen) > 30*time.Minute {
+            continue
+        }
+        if isShareableAddr(addr, targetIPs) {
+            seen[addr] = true
+            addrs = append(addrs, addr)
+        }
+    }
+    m.knownNodesMu.RUnlock()
 
     if len(addrs) == 0 {
         return
@@ -811,11 +865,15 @@ func (m *Manager) sendPeerList(target *PeerConnection) {
 // HandlePeerList processes a received peer list message.
 // Entries prefixed with '@' are self-announcements (the sender's own listen addresses).
 // Regular entries are addresses of other peers to connect to.
+// When ANY new address is learned (self-announcement or regular), we immediately
+// re-gossip updated peer lists to all connected peers for fast propagation.
 func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
     if len(payload) == 0 {
         return
     }
     parts := strings.Split(string(payload), ",")
+    hasNewAddrs := false
+
     for _, part := range parts {
         part = strings.TrimSpace(part)
         if part == "" {
@@ -825,7 +883,6 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
         if strings.HasPrefix(part, "@") {
             // Self-announcement: store as the sender's listen address
             listenAddr := strings.TrimPrefix(part, "@")
-            isNew := false
             m.mu.Lock()
             if peer, ok := m.peers[from]; ok {
                 found := false
@@ -838,32 +895,39 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
                 if !found {
                     peer.ListenAddrs = append(peer.ListenAddrs, listenAddr)
                     m.logger.Info("Peer %s announced listen addr: %s", peer.Address, listenAddr)
-                    isNew = true
+                    hasNewAddrs = true
                 }
             }
             m.mu.Unlock()
-            // Track in known nodes
             m.trackKnownNode(listenAddr)
-            // When a peer announces a new address, immediately send updated peer lists
-            // to ALL peers. This fixes the timing issue: when Laptop2 connects to VPS
-            // and announces @192.168.18.23, VPS now knows Laptop1 (192.168.18.8) and
-            // Laptop2 (192.168.18.23) are on the same subnet — so it shares them immediately
-            // instead of waiting up to 60s for the next peer exchange cycle.
-            if isNew {
-                m.mu.RLock()
-                allPeers := make([]*PeerConnection, 0, len(m.peers))
-                for _, p := range m.peers {
-                    allPeers = append(allPeers, p)
-                }
-                m.mu.RUnlock()
-                for _, p := range allPeers {
-                    m.sendPeerList(p)
-                }
-            }
         } else {
-            // Peer address to try connecting to — also track it
-            m.trackKnownNode(part)
+            // Peer address learned via gossip — store AND try to connect.
+            // Even if we can't connect (peer behind NAT), we store it in
+            // knownNodes so we can re-share it with OTHER peers who might
+            // be able to reach it (e.g. same LAN). This is how multi-hop
+            // gossip works: knowledge propagates transitively.
+            if m.trackKnownNode(part) {
+                hasNewAddrs = true
+            }
             m.tryConnectToPeer(part)
+        }
+    }
+
+    // Re-gossip: when new addresses are learned, immediately share updated
+    // peer lists with all connected peers. This ensures fast propagation:
+    // - Self-announcements: VPS learns Laptop2's LAN addr, immediately tells Laptop1
+    // - Regular addresses: node B learns about C from A, immediately tells D
+    // The gossip is self-limiting: addresses can only be "new" once per node,
+    // so the total re-gossip events are bounded by O(addresses × peers).
+    if hasNewAddrs {
+        m.mu.RLock()
+        allPeers := make([]*PeerConnection, 0, len(m.peers))
+        for _, p := range m.peers {
+            allPeers = append(allPeers, p)
+        }
+        m.mu.RUnlock()
+        for _, p := range allPeers {
+            m.sendPeerList(p)
         }
     }
 }
@@ -988,12 +1052,16 @@ func (m *Manager) tryConnectToPeer(addr string) {
     }(addr, addrHost)
 }
 
-// peerExchangeLoop periodically re-broadcasts peer lists and self-announcements
+// peerExchangeLoop periodically re-broadcasts peer lists and self-announcements.
+// Runs every 30s for fast convergence. Also cleans up stale known nodes.
 func (m *Manager) peerExchangeLoop() {
     defer m.wg.Done()
 
-    ticker := time.NewTicker(60 * time.Second)
+    ticker := time.NewTicker(30 * time.Second)
     defer ticker.Stop()
+
+    cleanupTicker := time.NewTicker(5 * time.Minute)
+    defer cleanupTicker.Stop()
 
     for {
         select {
@@ -1011,6 +1079,8 @@ func (m *Manager) peerExchangeLoop() {
                 m.announceSelf(p)
                 m.sendPeerList(p)
             }
+        case <-cleanupTicker.C:
+            m.cleanKnownNodes()
         }
     }
 }
@@ -1187,20 +1257,28 @@ func (m *Manager) HasPeer(routerHash [32]byte) bool {
 
 // ─── Known nodes tracking ─────────────────────────────────────────────────────
 
-// trackKnownNode adds an address to the known nodes map
-func (m *Manager) trackKnownNode(addr string) {
+// trackKnownNode adds an address to the known nodes map.
+// Returns true if the address was new (not previously known), false if it was
+// already known (timestamp refreshed). This is used to trigger re-gossip only
+// when genuinely new addresses are learned, preventing gossip storms.
+func (m *Manager) trackKnownNode(addr string) bool {
     if addr == "" {
-        return
+        return false
     }
     // Skip loopback
     if h, _, err := net.SplitHostPort(addr); err == nil {
         if h == "127.0.0.1" || h == "::1" {
-            return
+            return false
         }
     }
     m.knownNodesMu.Lock()
+    defer m.knownNodesMu.Unlock()
+    if _, exists := m.knownNodes[addr]; exists {
+        m.knownNodes[addr] = time.Now() // refresh timestamp
+        return false
+    }
     m.knownNodes[addr] = time.Now()
-    m.knownNodesMu.Unlock()
+    return true
 }
 
 // GetKnownNodeCount returns the number of unique known nodes in the network
@@ -1228,6 +1306,19 @@ func (m *Manager) GetKnownNodes() []string {
         addrs = append(addrs, addr)
     }
     return addrs
+}
+
+// cleanKnownNodes removes stale entries from the known nodes map.
+// Addresses not refreshed within the last hour are forgotten.
+func (m *Manager) cleanKnownNodes() {
+    m.knownNodesMu.Lock()
+    defer m.knownNodesMu.Unlock()
+    cutoff := time.Now().Add(-1 * time.Hour)
+    for addr, lastSeen := range m.knownNodes {
+        if lastSeen.Before(cutoff) {
+            delete(m.knownNodes, addr)
+        }
+    }
 }
 
 // Stop stops the transport manager
