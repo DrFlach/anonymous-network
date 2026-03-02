@@ -10,6 +10,10 @@ import (
 	"network/pkg/util"
 )
 
+// MaxFloodTTL is the maximum number of hops a flooded RouterInfo can travel.
+// This prevents infinite propagation across large networks.
+const MaxFloodTTL = 4
+
 // FloodfillManager handles the distributed hash table (DHT) for RouterInfo propagation
 type FloodfillManager struct {
 	store         *Store
@@ -38,8 +42,14 @@ func (fm *FloodfillManager) SetSendFunc(f func(routerHash [32]byte, data []byte)
 	fm.sendFunc = f
 }
 
-// HandleDatabaseStore processes a received RouterInfo store request
+// HandleDatabaseStore processes a received RouterInfo store request (backward compat, TTL=MaxFloodTTL)
 func (fm *FloodfillManager) HandleDatabaseStore(data []byte) error {
+	return fm.HandleDatabaseStoreWithTTL(data, MaxFloodTTL)
+}
+
+// HandleDatabaseStoreWithTTL processes a received RouterInfo store request with a TTL.
+// TTL is decremented on each hop; when it reaches 0, propagation stops.
+func (fm *FloodfillManager) HandleDatabaseStoreWithTTL(data []byte, ttl int) error {
 	ri, err := DeserializeRouterInfo(data)
 	if err != nil {
 		return fmt.Errorf("failed to deserialize RouterInfo: %w", err)
@@ -66,12 +76,12 @@ func (fm *FloodfillManager) HandleDatabaseStore(data []byte) error {
 		return fmt.Errorf("failed to store RouterInfo: %w", err)
 	}
 
-	// If we're a floodfill router, propagate to other floodfill routers
-	if fm.isFloodfill {
+	// If we're a floodfill router and TTL > 0, propagate to other floodfill routers
+	if fm.isFloodfill && ttl > 0 {
 		fm.flood(ri, data)
 	}
 
-	fm.logger.Debug("Stored RouterInfo for %x from network", ri.RouterHash[:8])
+	fm.logger.Debug("Stored RouterInfo for %x from network (TTL=%d)", ri.RouterHash[:8], ttl)
 	return nil
 }
 
@@ -314,6 +324,53 @@ func parseRouterInfoData(data []byte) (*RouterInfo, error) {
 	}
 
 	return ri, nil
+}
+
+// SerializeRouterInfoBatch serializes multiple RouterInfos for peer exchange.
+// Format: [count:2] { [len:2][serialized_routerinfo]... }
+func SerializeRouterInfoBatch(infos []*RouterInfo) []byte {
+	buf := new(bytes.Buffer)
+	binary.Write(buf, binary.BigEndian, uint16(len(infos)))
+	for _, ri := range infos {
+		data := SerializeRouterInfo(ri)
+		binary.Write(buf, binary.BigEndian, uint16(len(data)))
+		buf.Write(data)
+	}
+	return buf.Bytes()
+}
+
+// DeserializeRouterInfoBatch parses multiple RouterInfos from peer exchange bytes.
+func DeserializeRouterInfoBatch(data []byte) ([]*RouterInfo, error) {
+	if len(data) < 2 {
+		return nil, fmt.Errorf("batch data too short")
+	}
+	buf := bytes.NewReader(data)
+	var count uint16
+	binary.Read(buf, binary.BigEndian, &count)
+
+	if count > 500 {
+		count = 500 // safety cap
+	}
+
+	result := make([]*RouterInfo, 0, count)
+	for i := 0; i < int(count); i++ {
+		var riLen uint16
+		if err := binary.Read(buf, binary.BigEndian, &riLen); err != nil {
+			break
+		}
+		riData := make([]byte, riLen)
+		if _, err := buf.Read(riData); err != nil {
+			break
+		}
+		ri, err := DeserializeRouterInfo(riData)
+		if err != nil {
+			continue // skip bad entries
+		}
+		if ri.Verify() && !ri.IsExpired() {
+			result = append(result, ri)
+		}
+	}
+	return result, nil
 }
 
 // GetFloodfills returns all floodfill RouterInfos

@@ -38,6 +38,11 @@ type Config struct {
     // Performance
     MessageQueueSize  int `json:"message_queue_size"`
     
+    // Peer Exchange settings
+    PeerExchangeIntervalSec int  `json:"peer_exchange_interval_sec"`
+    MaxPeerExchangeSize     int  `json:"max_peer_exchange_size"`
+    BridgeMode              bool `json:"bridge_mode,omitempty"`
+    
     // UPnP auto port forwarding
     DisableUPnP       bool `json:"disable_upnp,omitempty"`
     
@@ -84,6 +89,9 @@ func DefaultConfig() *Config {
         },
         BlockedHosts:     []string{},
         MessageQueueSize: 1000,
+        PeerExchangeIntervalSec: 300, // 5 minutes
+        MaxPeerExchangeSize:     50,  // max RouterInfos per exchange
+        BridgeMode:              false,
         LogLevel:         "INFO",
     }
 }

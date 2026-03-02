@@ -124,3 +124,86 @@ func (s *Store) Count() int {
     
     return len(s.routers)
 }
+
+// GetRandomFiltered returns up to n random non-expired RouterInfos
+// that are NOT present in the given bloom filter.
+// If bloom is nil, behaves like GetRandom.
+func (s *Store) GetRandomFiltered(n int, bloom *BloomFilter) []*RouterInfo {
+    all := s.GetAll()
+
+    // Filter out entries the remote already has
+    var candidates []*RouterInfo
+    for _, ri := range all {
+        if bloom != nil && bloom.Contains(ri.RouterHash) {
+            continue
+        }
+        candidates = append(candidates, ri)
+    }
+
+    if len(candidates) <= n {
+        return candidates
+    }
+
+    // Fisher-Yates shuffle first n
+    for i := 0; i < n; i++ {
+        j := i + int(time.Now().UnixNano()%(int64(len(candidates)-i)))
+        candidates[i], candidates[j] = candidates[j], candidates[i]
+    }
+
+    return candidates[:n]
+}
+
+// BuildBloomFilter creates a bloom filter containing all current RouterHashes.
+// This is sent with PeerExchangeReq so the remote knows what we already have.
+func (s *Store) BuildBloomFilter() *BloomFilter {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    bf := NewBloomFilterForCount(len(s.routers))
+    for hash := range s.routers {
+        bf.Add(hash)
+    }
+    return bf
+}
+
+// GetAllHashes returns all stored router hashes
+func (s *Store) GetAllHashes() [][32]byte {
+    s.mu.RLock()
+    defer s.mu.RUnlock()
+
+    hashes := make([][32]byte, 0, len(s.routers))
+    for h := range s.routers {
+        hashes = append(hashes, h)
+    }
+    return hashes
+}
+
+// MergeRouterInfos adds multiple RouterInfos from a peer exchange.
+// Returns the number of new entries added.
+func (s *Store) MergeRouterInfos(infos []*RouterInfo) int {
+    added := 0
+    for _, ri := range infos {
+        if ri == nil {
+            continue
+        }
+        if !ri.Verify() {
+            continue
+        }
+        if ri.IsExpired() {
+            continue
+        }
+        s.mu.Lock()
+        if _, exists := s.routers[ri.RouterHash]; !exists {
+            s.routers[ri.RouterHash] = ri
+            added++
+        } else {
+            // Update if newer
+            existing := s.routers[ri.RouterHash]
+            if ri.Timestamp.After(existing.Timestamp) {
+                s.routers[ri.RouterHash] = ri
+            }
+        }
+        s.mu.Unlock()
+    }
+    return added
+}

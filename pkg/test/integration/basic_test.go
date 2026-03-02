@@ -83,21 +83,25 @@ func TestMessageExchange(t *testing.T) {
     
     tm2.SendToAddress(peers[0], data)
     
-    // Receive on router1
-    select {
-    case msg := <-tm1.GetIncomingMessages():
-        t.Logf("✓ Received message: %d bytes", len(msg.Data))
-        
-        parsed, err := router.Deserialize(msg.Data)
-        if err != nil {
-            t.Fatal(err)
+    // Receive on router1 — skip internal protocol messages (peer list, peer exchange, etc.)
+    // and look for our ping.
+    timeout := time.After(5 * time.Second)
+    found := false
+    for !found {
+        select {
+        case msg := <-tm1.GetIncomingMessages():
+            parsed, err := router.Deserialize(msg.Data)
+            if err != nil {
+                continue
+            }
+            if parsed.Type == router.MsgTypePing {
+                t.Logf("✓ Received ping message: %d bytes", len(msg.Data))
+                found = true
+            } else {
+                t.Logf("  Skipping protocol message type %d", parsed.Type)
+            }
+        case <-timeout:
+            t.Fatal("Timeout waiting for ping message")
         }
-        
-        if parsed.Type != router.MsgTypePing {
-            t.Errorf("Expected ping, got type %d", parsed.Type)
-        }
-        
-    case <-time.After(2 * time.Second):
-        t.Fatal("Timeout waiting for message")
     }
 }

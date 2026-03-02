@@ -35,31 +35,31 @@ const (
 	addrIPv6   = 0x04
 
 	// Reply codes
-	repSuccess         = 0x00
-	repGeneralFailure  = 0x01
-	repNotAllowed      = 0x02
-	repNetUnreachable  = 0x03
-	repHostUnreachable = 0x04
-	repConnRefused     = 0x05
-	repTTLExpired      = 0x06
-	repCmdNotSupported = 0x07
+	repSuccess          = 0x00
+	repGeneralFailure   = 0x01
+	repNotAllowed       = 0x02
+	repNetUnreachable   = 0x03
+	repHostUnreachable  = 0x04
+	repConnRefused      = 0x05
+	repTTLExpired       = 0x06
+	repCmdNotSupported  = 0x07
 	repAddrNotSupported = 0x08
 )
 
 // SOCKS5Server is a SOCKS5 proxy server that routes traffic through anonymous tunnels
 type SOCKS5Server struct {
-	listenAddr   string
-	listener     net.Listener
-	tunnelPool   *tunnel.Pool
-	outproxy     *Outproxy
-	logger       *util.Logger
-	mu           sync.Mutex
-	running      bool
-	stopChan     chan struct{}
-	wg           sync.WaitGroup
-	activeConns  int64
-	username     string // Optional SOCKS5 auth
-	password     string
+	listenAddr  string
+	listener    net.Listener
+	tunnelPool  *tunnel.Pool
+	outproxy    *Outproxy
+	logger      *util.Logger
+	mu          sync.Mutex
+	running     bool
+	stopChan    chan struct{}
+	wg          sync.WaitGroup
+	activeConns int64
+	username    string // Optional SOCKS5 auth
+	password    string
 }
 
 // SOCKS5Config configures the SOCKS5 proxy

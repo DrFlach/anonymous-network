@@ -111,6 +111,22 @@ func main() {
 	// Create transport manager
 	transportMgr := transport.NewManager(identity, config.MaxConnections)
 
+	// Configure cross-network peer exchange
+	transportMgr.SetNetDB(netDB)
+	peerExInterval := time.Duration(config.PeerExchangeIntervalSec) * time.Second
+	if peerExInterval < 30*time.Second {
+		peerExInterval = 5 * time.Minute
+	}
+	maxExSize := config.MaxPeerExchangeSize
+	if maxExSize <= 0 {
+		maxExSize = 50
+	}
+	transportMgr.SetPeerExchangeConfig(peerExInterval, maxExSize, config.BridgeMode)
+	if config.BridgeMode {
+		logger.Info("Bridge mode: ENABLED — will actively propagate RouterInfos across networks")
+	}
+	logger.Info("Peer exchange: interval=%s, max_size=%d", peerExInterval, maxExSize)
+
 	// Enable UPnP auto port forwarding (unless disabled)
 	if !*noUPnP && !config.DisableUPnP {
 		transportMgr.EnableUPnP()
@@ -144,6 +160,14 @@ func main() {
 	// Set up floodfill send function
 	floodfillMgr.SetSendFunc(func(routerHash [32]byte, data []byte) error {
 		return transportMgr.SendTo(routerHash, data)
+	})
+
+	// Set up external IP change callback: re-publish RouterInfo when our public IP is discovered.
+	// This is critical for cross-network connectivity: without it, our RouterInfo in the
+	// floodfill network has 0.0.0.0 and peers from other networks can't reach us.
+	transportMgr.SetExternalIPChangeCallback(func(newIP string) {
+		logger.Info("External IP changed to %s — re-publishing RouterInfo", newIP)
+		republishRouterInfo(identity, newIP, config.ListenPort, netDB, floodfillMgr, config, logger)
 	})
 
 	// Connect to seed routers if provided
@@ -293,6 +317,9 @@ func publishRouterInfo(identity *crypto.RouterIdentity, listenAddr string, netDB
 	if config.OutproxyEnabled {
 		ri.SetCapability("outproxy", true)
 	}
+	if config.BridgeMode {
+		ri.SetCapability("bridge", true)
+	}
 
 	// Sign RouterInfo
 	ri.Sign(identity.SigningPrivateKey)
@@ -304,6 +331,43 @@ func publishRouterInfo(identity *crypto.RouterIdentity, listenAddr string, netDB
 	}
 
 	logger.Info("RouterInfo published")
+}
+
+// republishRouterInfo re-publishes our RouterInfo with an updated external IP.
+// Called when YourIP (STUN-like) discovers our public IP, so that peers in
+// other networks can find and connect to us via the floodfill DHT.
+func republishRouterInfo(identity *crypto.RouterIdentity, externalIP string, listenPort int, netDB *netdb.Store, floodfillMgr *netdb.FloodfillManager, config *util.Config, logger *util.Logger) {
+	ri := netdb.NewRouterInfo(
+		identity.RouterHash,
+		identity.SigningPublicKey,
+		identity.EncryptionPublicKey,
+	)
+
+	// Add external (public) IP as primary address
+	ri.AddAddress(externalIP, listenPort)
+
+	// Set capabilities
+	if config.IsFloodfill {
+		ri.SetCapability("floodfill", true)
+	}
+	ri.SetCapability("reachable", true)
+	if config.OutproxyEnabled {
+		ri.SetCapability("outproxy", true)
+	}
+	if config.BridgeMode {
+		ri.SetCapability("bridge", true)
+	}
+
+	// Sign with updated data
+	ri.Sign(identity.SigningPrivateKey)
+
+	// Publish to floodfill network
+	if err := floodfillMgr.PublishRouterInfo(ri); err != nil {
+		logger.Error("Failed to re-publish RouterInfo with external IP: %v", err)
+		return
+	}
+
+	logger.Info("RouterInfo re-published with external IP %s:%d", externalIP, listenPort)
 }
 
 func parseAddr(addr string) (string, int) {
@@ -383,6 +447,14 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 		case router.MsgTypeYourIP:
 			// A peer tells us our external IP (STUN-like)
 			transportMgr.HandleYourIP(parsedMsg.Payload)
+
+		case router.MsgTypePeerExchange:
+			// Full RouterInfo exchange response (cross-network discovery)
+			transportMgr.HandlePeerExchangeResponse(msg.From, parsedMsg.Payload)
+
+		case router.MsgTypePeerExchangeReq:
+			// RouterInfo exchange request with bloom filter
+			transportMgr.HandlePeerExchangeRequest(msg.From, parsedMsg.Payload)
 
 		default:
 			logger.Debug("Unknown message type: %d", parsedMsg.Type)
