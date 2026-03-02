@@ -679,7 +679,9 @@ func (m *Manager) getLocalListenAddrs() []string {
 }
 
 // announceSelf sends our own listen addresses to a peer (prefixed with @ to distinguish from peer sharing).
-// Only sends addresses the peer can actually reach: public IPs always, private IPs only to same-subnet peers.
+// We send ALL addresses (including private LAN IPs) because even if the peer itself can't reach them,
+// it needs them to build correct peer lists: e.g. VPS learns that Laptop1 is on 192.168.18.8 and
+// Laptop2 is on 192.168.18.23, so it can tell them about each other via subnet matching in sendPeerList.
 func (m *Manager) announceSelf(peer *PeerConnection) {
     allAddrs := m.getLocalListenAddrs()
 
@@ -701,40 +703,27 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
         }
     }
 
-    // Collect all known IPs of the peer (TCP addr + announced ListenAddrs)
-    // This is critical: a peer behind NAT has a public TCP address but may
-    // have announced a private LAN address like 192.168.18.23 — we need both.
-    peerIPs := peerKnownIPs(peer)
-
-    var reachableAddrs []string
+    // Filter out only obviously unusable addresses (loopback, link-local)
+    // but keep ALL private LAN addresses — the peer needs them for subnet-based
+    // peer matching even if it can't reach them directly.
+    var validAddrs []string
     for _, a := range allAddrs {
         h, _, err := net.SplitHostPort(a)
         if err != nil {
             continue
         }
         ip := net.ParseIP(h)
-        if ip == nil {
+        if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
             continue
         }
-        // Public IP — always announce
-        if !ip.IsPrivate() && !ip.IsLoopback() {
-            reachableAddrs = append(reachableAddrs, a)
-            continue
-        }
-        // Private IP — announce if peer has ANY address on the same /24 subnet
-        for _, pip := range peerIPs {
-            if sameSubnet24(ip, pip) {
-                reachableAddrs = append(reachableAddrs, a)
-                break
-            }
-        }
+        validAddrs = append(validAddrs, a)
     }
 
-    if len(reachableAddrs) == 0 {
+    if len(validAddrs) == 0 {
         return
     }
     var parts []string
-    for _, a := range reachableAddrs {
+    for _, a := range validAddrs {
         parts = append(parts, "@"+a)
     }
     payload := []byte(strings.Join(parts, ","))
