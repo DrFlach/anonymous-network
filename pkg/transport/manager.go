@@ -593,9 +593,10 @@ func (m *Manager) getLocalListenAddrs() []string {
     return addrs
 }
 
-// announceSelf sends our own listen addresses to a peer (prefixed with @ to distinguish from peer sharing)
+// announceSelf sends our own listen addresses to a peer (prefixed with @ to distinguish from peer sharing).
+// Only sends addresses the peer can actually reach: public IPs always, private IPs only to same-subnet peers.
 func (m *Manager) announceSelf(peer *PeerConnection) {
-    ownAddrs := m.getLocalListenAddrs()
+    allAddrs := m.getLocalListenAddrs()
 
     // Also include our detected external IP if we have one
     m.externalIPMu.RLock()
@@ -603,24 +604,53 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
     m.externalIPMu.RUnlock()
     if extIP != "" && m.listenPort > 0 {
         extAddr := fmt.Sprintf("%s:%d", extIP, m.listenPort)
-        // Avoid duplicates
         found := false
-        for _, a := range ownAddrs {
+        for _, a := range allAddrs {
             if a == extAddr {
                 found = true
                 break
             }
         }
         if !found {
-            ownAddrs = append(ownAddrs, extAddr)
+            allAddrs = append(allAddrs, extAddr)
         }
     }
 
-    if len(ownAddrs) == 0 {
+    // Determine peer's subnet to filter private IPs
+    peerHost := ""
+    if h, _, err := net.SplitHostPort(peer.Address); err == nil {
+        peerHost = h
+    }
+    peerIP := net.ParseIP(peerHost)
+
+    var reachableAddrs []string
+    for _, a := range allAddrs {
+        h, _, err := net.SplitHostPort(a)
+        if err != nil {
+            continue
+        }
+        ip := net.ParseIP(h)
+        if ip == nil {
+            continue
+        }
+        // Public IP — always announce
+        if !ip.IsPrivate() && !ip.IsLoopback() {
+            reachableAddrs = append(reachableAddrs, a)
+            continue
+        }
+        // Private IP — only announce to peers on the same /24 subnet
+        if peerIP != nil && ip.To4() != nil && peerIP.To4() != nil {
+            if ip.To4()[0] == peerIP.To4()[0] && ip.To4()[1] == peerIP.To4()[1] && ip.To4()[2] == peerIP.To4()[2] {
+                reachableAddrs = append(reachableAddrs, a)
+            }
+        }
+    }
+
+    if len(reachableAddrs) == 0 {
         return
     }
     var parts []string
-    for _, a := range ownAddrs {
+    for _, a := range reachableAddrs {
         parts = append(parts, "@"+a)
     }
     payload := []byte(strings.Join(parts, ","))
@@ -634,17 +664,49 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
     }
 }
 
-// sendPeerList sends known peer listen addresses to a specific peer
+// sendPeerList sends known peer listen addresses to a specific peer.
+// Only shares public IPs and same-subnet private IPs to avoid sharing
+// unreachable addresses (e.g. VirtualBox host-only, GCP internal IPs).
 func (m *Manager) sendPeerList(target *PeerConnection) {
+    // Determine target's network to decide what's shareable
+    targetHost := ""
+    if h, _, err := net.SplitHostPort(target.Address); err == nil {
+        targetHost = h
+    }
+    targetIP := net.ParseIP(targetHost)
+
     m.mu.RLock()
     var addrs []string
+    seen := make(map[string]bool)
     for _, p := range m.peers {
         if p.RouterHash == target.RouterHash {
             continue
         }
-        // Only share peers whose listen addresses we know
         for _, la := range p.ListenAddrs {
-            addrs = append(addrs, la)
+            if seen[la] {
+                continue
+            }
+            h, _, err := net.SplitHostPort(la)
+            if err != nil {
+                continue
+            }
+            ip := net.ParseIP(h)
+            if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+                continue
+            }
+            // Public IP — always share
+            if !ip.IsPrivate() {
+                seen[la] = true
+                addrs = append(addrs, la)
+                continue
+            }
+            // Private IP — only share if target is on the same /24 subnet
+            if targetIP != nil && ip.To4() != nil && targetIP.To4() != nil {
+                if ip.To4()[0] == targetIP.To4()[0] && ip.To4()[1] == targetIP.To4()[1] && ip.To4()[2] == targetIP.To4()[2] {
+                    seen[la] = true
+                    addrs = append(addrs, la)
+                }
+            }
         }
     }
     m.mu.RUnlock()
@@ -662,7 +724,7 @@ func (m *Manager) sendPeerList(target *PeerConnection) {
     if err := target.Conn.SendFrame(data); err != nil {
         m.logger.Debug("Failed to send peer list to %s: %v", target.Address, err)
     } else {
-        m.logger.Debug("Sent peer list (%d addrs) to %s", len(addrs), target.Address)
+        m.logger.Info("Sent peer list (%d reachable addrs) to %s", len(addrs), target.Address)
     }
 }
 
@@ -708,22 +770,66 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
     }
 }
 
-// tryConnectToPeer attempts to connect to a discovered peer address
-func (m *Manager) tryConnectToPeer(addr string) {
-    // Skip loopback
-    if h, _, err := net.SplitHostPort(addr); err == nil {
-        if h == "127.0.0.1" || h == "::1" {
-            return
+// isReachableAddr checks if a remote address is likely reachable from us.
+// Public IPs are always reachable (assuming port is open).
+// Private IPs are only reachable if we're on the same subnet.
+func (m *Manager) isReachableAddr(addr string) bool {
+    host, _, err := net.SplitHostPort(addr)
+    if err != nil {
+        return false
+    }
+    ip := net.ParseIP(host)
+    if ip == nil {
+        return false
+    }
+    if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+        return false
+    }
+    // Also filter CGNAT range (100.64.0.0/10) — used by Tailscale, carrier-grade NAT, etc.
+    if ip4 := ip.To4(); ip4 != nil {
+        if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+            return false
         }
     }
+    // Public IP — always try
+    if !ip.IsPrivate() {
+        return true
+    }
+    // Private IP — only reachable if we have an interface on the same subnet
+    ourAddrs := m.getLocalListenAddrs()
+    for _, oa := range ourAddrs {
+        oh, _, err := net.SplitHostPort(oa)
+        if err != nil {
+            continue
+        }
+        ourIP := net.ParseIP(oh)
+        if ourIP == nil {
+            continue
+        }
+        // Same /24 for simplicity (covers most LANs)
+        if ip.To4() != nil && ourIP.To4() != nil {
+            if ip.To4()[0] == ourIP.To4()[0] && ip.To4()[1] == ourIP.To4()[1] && ip.To4()[2] == ourIP.To4()[2] {
+                return true
+            }
+        }
+    }
+    return false
+}
 
-    // Check by IP host — skip if already connected to same host
+// tryConnectToPeer attempts to connect to a discovered peer address
+func (m *Manager) tryConnectToPeer(addr string) {
+    // Skip unreachable addresses (foreign private IPs, loopback, etc)
+    if !m.isReachableAddr(addr) {
+        m.logger.Debug("Peer exchange: skipping unreachable %s", addr)
+        return
+    }
+
     addrHost := addr
     if h, _, err := net.SplitHostPort(addr); err == nil {
         addrHost = h
     }
 
-    // Also skip our own addresses
+    // Skip our own addresses
     for _, ownAddr := range m.getLocalListenAddrs() {
         if ownAddr == addr {
             return
