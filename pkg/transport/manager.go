@@ -58,6 +58,10 @@ type Manager struct {
     // UPnP auto port forwarding
     upnp       *UPnPManager
     upnpActive bool
+
+    // Guard against duplicate concurrent connection attempts to the same host
+    connectingHosts   map[string]bool
+    connectingHostsMu sync.Mutex
 }
 
 // IncomingMessage represents a message received from a peer
@@ -70,14 +74,15 @@ type IncomingMessage struct {
 // NewManager creates a new transport manager
 func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
     return &Manager{
-        identity:    identity,
-        peers:       make(map[[32]byte]*PeerConnection),
-        peersByAddr: make(map[string]*PeerConnection),
-        knownNodes:  make(map[string]time.Time),
-        maxPeers:    maxPeers,
-        logger:      util.GetLogger(),
-        incomingMsg: make(chan *IncomingMessage, 1000),
-        stopChan:    make(chan struct{}),
+        identity:        identity,
+        peers:           make(map[[32]byte]*PeerConnection),
+        peersByAddr:     make(map[string]*PeerConnection),
+        knownNodes:      make(map[string]time.Time),
+        connectingHosts: make(map[string]bool),
+        maxPeers:        maxPeers,
+        logger:          util.GetLogger(),
+        incomingMsg:     make(chan *IncomingMessage, 1000),
+        stopChan:        make(chan struct{}),
     }
 }
 
@@ -239,17 +244,6 @@ func (m *Manager) handleIncoming(conn net.Conn) {
     routerHash := ntcpConn.RemoteRouterHash()
     hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
 
-    // Check if already connected (by router hash)
-    m.mu.RLock()
-    _, exists := m.peers[routerHash]
-    m.mu.RUnlock()
-    if exists {
-        m.logger.Debug("Already connected to peer %s, dropping duplicate", hashStr)
-        return
-    }
-
-    m.logger.Info("Handshake OK with %s (hash: %s)", conn.RemoteAddr(), hashStr)
-
     peer := &PeerConnection{
         Conn:         ntcpConn,
         RouterHash:   routerHash,
@@ -258,11 +252,19 @@ func (m *Manager) handleIncoming(conn net.Conn) {
         LastActivity: time.Now(),
     }
 
+    // Atomic check-and-add: prevent TOCTOU race where two connections
+    // with the same router hash both pass the check before either adds.
     m.mu.Lock()
+    if _, exists := m.peers[routerHash]; exists {
+        m.mu.Unlock()
+        m.logger.Debug("Already connected to peer %s, dropping duplicate", hashStr)
+        return
+    }
     m.peers[routerHash] = peer
     m.peersByAddr[peer.Address] = peer
     m.mu.Unlock()
 
+    m.logger.Info("Handshake OK with %s (hash: %s)", conn.RemoteAddr(), hashStr)
     m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 
     // Tell the remote peer what their external IP looks like to us (STUN-like)
@@ -275,9 +277,12 @@ func (m *Manager) handleIncoming(conn net.Conn) {
     // Receive messages until disconnect
     m.receiveLoop(peer)
 
-    // Cleanup
+    // Cleanup: only delete if THIS peer is still the registered one.
+    // Another connection might have replaced us in the map.
     m.mu.Lock()
-    delete(m.peers, routerHash)
+    if existing, ok := m.peers[routerHash]; ok && existing == peer {
+        delete(m.peers, routerHash)
+    }
     delete(m.peersByAddr, peer.Address)
     m.mu.Unlock()
 
@@ -317,17 +322,6 @@ func (m *Manager) ConnectTo(address string) error {
     routerHash := ntcpConn.RemoteRouterHash()
     hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
 
-    // Check for duplicate by hash
-    m.mu.RLock()
-    _, hashExists := m.peers[routerHash]
-    m.mu.RUnlock()
-    if hashExists {
-        conn.Close()
-        return nil // already connected via different address
-    }
-
-    m.logger.Info("Handshake OK with %s (hash: %s)", address, hashStr)
-
     peer := &PeerConnection{
         Conn:         ntcpConn,
         RouterHash:   routerHash,
@@ -337,11 +331,19 @@ func (m *Manager) ConnectTo(address string) error {
         LastActivity: time.Now(),
     }
 
+    // Atomic check-and-add: prevent TOCTOU race where two connections
+    // with the same router hash both pass the check before either adds.
     m.mu.Lock()
+    if _, hashExists := m.peers[routerHash]; hashExists {
+        m.mu.Unlock()
+        conn.Close()
+        return nil // already connected via different address
+    }
     m.peers[routerHash] = peer
     m.peersByAddr[address] = peer
     m.mu.Unlock()
 
+    m.logger.Info("Handshake OK with %s (hash: %s)", address, hashStr)
     m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
 
     // Tell the remote peer what their external IP looks like to us (STUN-like)
@@ -357,8 +359,11 @@ func (m *Manager) ConnectTo(address string) error {
         defer m.wg.Done()
         m.receiveLoop(peer)
 
+        // Cleanup: only delete if THIS peer is still the registered one.
         m.mu.Lock()
-        delete(m.peers, routerHash)
+        if existing, ok := m.peers[routerHash]; ok && existing == peer {
+            delete(m.peers, routerHash)
+        }
         delete(m.peersByAddr, address)
         m.mu.Unlock()
 
@@ -959,12 +964,28 @@ func (m *Manager) tryConnectToPeer(addr string) {
         return
     }
 
+    // Prevent multiple concurrent connection attempts to the same host.
+    // Without this, N peer-list messages arriving at once all spawn goroutines
+    // before any connection is registered in peersByAddr.
+    m.connectingHostsMu.Lock()
+    if m.connectingHosts[addrHost] {
+        m.connectingHostsMu.Unlock()
+        return
+    }
+    m.connectingHosts[addrHost] = true
+    m.connectingHostsMu.Unlock()
+
     m.logger.Info("Peer exchange: discovered %s, connecting...", addr)
-    go func(a string) {
+    go func(a, host string) {
+        defer func() {
+            m.connectingHostsMu.Lock()
+            delete(m.connectingHosts, host)
+            m.connectingHostsMu.Unlock()
+        }()
         if err := m.ConnectTo(a); err != nil {
             m.logger.Debug("Peer exchange connect to %s failed: %v", a, err)
         }
-    }(addr)
+    }(addr, addrHost)
 }
 
 // peerExchangeLoop periodically re-broadcasts peer lists and self-announcements
