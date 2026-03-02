@@ -74,6 +74,14 @@ type Manager struct {
 
 	// Callback when external IP changes (for RouterInfo re-publish)
 	onExternalIPChange func(newIP string)
+
+	// Connection backoff: prevents spamming unreachable peers
+	backoff *ConnectionBackoff
+
+	// Relay circuit management (VPS bridge)
+	relayMgr      *RelayManager
+	relayRoutes   map[[32]byte][32]byte // destHash → relayPeerHash
+	relayRoutesMu sync.RWMutex
 }
 
 // IncomingMessage represents a message received from a peer
@@ -97,6 +105,9 @@ func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
 		stopChan:             make(chan struct{}),
 		peerExchangeInterval: 5 * time.Minute,
 		maxExchangeSize:      50,
+		backoff:              NewConnectionBackoff(),
+		relayMgr:             NewRelayManager(),
+		relayRoutes:          make(map[[32]byte][32]byte),
 	}
 }
 
@@ -337,6 +348,11 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 	delete(m.peersByAddr, peer.Address)
 	m.mu.Unlock()
 
+	// Clean up relay circuits involving this peer
+	if m.relayMgr != nil {
+		m.relayMgr.RemoveAllForPeer(routerHash)
+	}
+
 	m.logger.Info("Peer disconnected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
 }
 
@@ -420,6 +436,11 @@ func (m *Manager) ConnectTo(address string) error {
 		}
 		delete(m.peersByAddr, address)
 		m.mu.Unlock()
+
+		// Clean up relay circuits involving this peer
+		if m.relayMgr != nil {
+			m.relayMgr.RemoveAllForPeer(routerHash)
+		}
 
 		m.logger.Info("Peer disconnected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
 	}()
@@ -562,7 +583,10 @@ func (m *Manager) SendTo(routerHash [32]byte, data []byte) error {
 		return nil
 	}
 
-	// No direct connection — try relay through any connected peer
+	// No direct connection — try relay circuit first, then legacy relay
+	if err := m.SendViaRelay(routerHash, data); err == nil {
+		return nil
+	}
 	return m.relaySend(routerHash, data)
 }
 
@@ -1042,6 +1066,12 @@ func (m *Manager) tryConnectToPeer(addr string) {
 		addrHost = h
 	}
 
+	// Check backoff: don't spam unreachable peers
+	if m.backoff != nil && !m.backoff.ShouldConnect(addrHost) {
+		m.logger.Debug("Peer exchange: %s in backoff, skipping", addr)
+		return
+	}
+
 	// Skip our own addresses (local interfaces)
 	for _, ownAddr := range m.getLocalListenAddrs() {
 		if ownAddr == addr {
@@ -1102,6 +1132,13 @@ func (m *Manager) tryConnectToPeer(addr string) {
 		}()
 		if err := m.ConnectTo(a); err != nil {
 			m.logger.Debug("Peer exchange connect to %s failed: %v", a, err)
+			if m.backoff != nil {
+				m.backoff.RecordFailure(host)
+			}
+		} else {
+			if m.backoff != nil {
+				m.backoff.RecordSuccess(host)
+			}
 		}
 	}(addr, addrHost)
 }
@@ -1135,6 +1172,12 @@ func (m *Manager) peerExchangeLoop() {
 			}
 		case <-cleanupTicker.C:
 			m.cleanKnownNodes()
+			if m.backoff != nil {
+				m.backoff.Cleanup()
+			}
+			if m.relayMgr != nil {
+				m.relayMgr.CleanupStale()
+			}
 		}
 	}
 }
@@ -1311,6 +1354,14 @@ func (m *Manager) HasPeer(routerHash [32]byte) bool {
 	defer m.mu.RUnlock()
 	_, exists := m.peers[routerHash]
 	return exists
+}
+
+// GetRelayCircuitCount returns the number of active relay circuits.
+func (m *Manager) GetRelayCircuitCount() int {
+	if m.relayMgr == nil {
+		return 0
+	}
+	return m.relayMgr.CircuitCount()
 }
 
 // ─── Known nodes tracking ─────────────────────────────────────────────────────
@@ -1571,6 +1622,12 @@ func (m *Manager) HandlePeerExchangeResponse(from [32]byte, payload []byte) {
 		// Track and possibly connect
 		m.trackKnownNode(addr)
 		m.tryConnectToPeer(addr)
+
+		// If the peer is unreachable (behind foreign NAT), request relay circuit
+		// through any bridge-capable peer we're connected to.
+		if !m.isReachableAddr(addr) {
+			go m.requestRelayForPeer(ri.RouterHash)
+		}
 	}
 }
 
@@ -1604,4 +1661,62 @@ func (m *Manager) SendInitialPeerExchange(peer *PeerConnection) {
 	} else {
 		m.logger.Debug("Sent initial PeerExchange (%d RouterInfos) to %s", len(infos), peer.Address)
 	}
+}
+
+// requestRelayForPeer tries to request a relay circuit to an unreachable peer
+// through any connected bridge node.
+func (m *Manager) requestRelayForPeer(destHash [32]byte) {
+	// Already have a direct connection?
+	m.mu.RLock()
+	if _, exists := m.peers[destHash]; exists {
+		m.mu.RUnlock()
+		return
+	}
+	m.mu.RUnlock()
+
+	// Already have a relay route?
+	m.relayRoutesMu.RLock()
+	if _, hasRoute := m.relayRoutes[destHash]; hasRoute {
+		m.relayRoutesMu.RUnlock()
+		return
+	}
+	m.relayRoutesMu.RUnlock()
+
+	// Find a bridge peer to relay through (prefer seed/VPS nodes)
+	m.mu.RLock()
+	var bridgeHash [32]byte
+	found := false
+	for hash, peer := range m.peers {
+		if hash == destHash {
+			continue
+		}
+		// Prefer peers with public IPs (likely VPS/bridge)
+		h, _, err := net.SplitHostPort(peer.Address)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(h)
+		if ip != nil && !ip.IsPrivate() && !ip.IsLoopback() {
+			bridgeHash = hash
+			found = true
+			break
+		}
+	}
+	// Fallback: any connected peer
+	if !found {
+		for hash := range m.peers {
+			if hash != destHash {
+				bridgeHash = hash
+				found = true
+				break
+			}
+		}
+	}
+	m.mu.RUnlock()
+
+	if !found {
+		return
+	}
+
+	m.RequestRelayCircuit(bridgeHash, destHash)
 }

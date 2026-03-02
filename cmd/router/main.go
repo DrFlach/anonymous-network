@@ -444,6 +444,22 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 			// A relayed message has been delivered to us
 			transportMgr.HandleRelayResponse(parsedMsg.Payload)
 
+		case router.MsgTypeRelayCircuitOpen:
+			// A peer asks us (bridge/VPS) to open a relay circuit to another peer
+			transportMgr.HandleRelayCircuitOpen(msg.From, parsedMsg.Payload)
+
+		case router.MsgTypeRelayCircuitReady:
+			// VPS confirms relay circuit is established
+			transportMgr.HandleRelayCircuitReady(msg.From, parsedMsg.Payload)
+
+		case router.MsgTypeRelayCircuitData:
+			// Data forwarded through a relay circuit
+			transportMgr.HandleRelayCircuitData(msg.From, parsedMsg.Payload)
+
+		case router.MsgTypeRelayIntro:
+			// VPS tells us about a peer's external address for hole-punching
+			transportMgr.HandleRelayIntro(msg.From, parsedMsg.Payload)
+
 		case router.MsgTypeYourIP:
 			// A peer tells us our external IP (STUN-like)
 			transportMgr.HandleYourIP(parsedMsg.Payload)
@@ -555,9 +571,15 @@ func statusReporter(transportMgr *transport.Manager, tunnelPool *tunnel.Pool, ne
 			knownNodes := transportMgr.GetKnownNodeCount()
 			routerCount := netDB.Count()
 			inTunnels, outTunnels, participations := tunnelPool.Stats()
+			relayCircuits := transportMgr.GetRelayCircuitCount()
 
-			logger.Info("── Status: Peers=%d | Known nodes=%d | NetDB=%d | Tunnels: in=%d out=%d | Participating=%d ──",
-				peerCount, knownNodes, routerCount, inTunnels, outTunnels, participations)
+			if relayCircuits > 0 {
+				logger.Info("── Status: Peers=%d | Known nodes=%d | NetDB=%d | Tunnels: in=%d out=%d | Participating=%d | Relays=%d ──",
+					peerCount, knownNodes, routerCount, inTunnels, outTunnels, participations, relayCircuits)
+			} else {
+				logger.Info("── Status: Peers=%d | Known nodes=%d | NetDB=%d | Tunnels: in=%d out=%d | Participating=%d ──",
+					peerCount, knownNodes, routerCount, inTunnels, outTunnels, participations)
+			}
 		}
 	}
 }

@@ -26,6 +26,11 @@ const (
 	MsgTypeYourIP            // server tells connecting client its external IP
 	MsgTypePeerExchange      // exchange full RouterInfo records between peers
 	MsgTypePeerExchangeReq   // request RouterInfo records (with bloom filter)
+	MsgTypeRelayIntro        // VPS tells both NAT'd peers about each other for hole-punch
+	MsgTypeRelayCircuitOpen  // client asks VPS to open a relay circuit to destHash
+	MsgTypeRelayCircuitReady // VPS confirms relay circuit is established
+	MsgTypeRelayCircuitData  // data frame forwarded through a relay circuit
+	MsgTypeHolePunch         // direct probe packet for NAT hole punching
 )
 
 // Message represents a network protocol message
