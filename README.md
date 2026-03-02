@@ -21,13 +21,33 @@ A fully functional anonymous peer-to-peer network with onion routing, garlic enc
 ```bash
 git clone https://github.com/DrFlach/anonymous-network.git
 cd anonymous-network
+```
+
+#### Linux / macOS
+```bash
 go build -o anon-router ./cmd/router/
+```
+
+#### Windows (cmd / PowerShell / Git Bash)
+```bash
+go build -o anon-router.exe ./cmd/router/
 ```
 
 ### 2. Run
 
+#### Linux / macOS
 ```bash
 ./anon-router
+```
+
+#### Windows (cmd / PowerShell)
+```powershell
+.\anon-router.exe
+```
+
+#### Windows (Git Bash / MINGW64)
+```bash
+./anon-router.exe
 ```
 
 That's it. The router will:
@@ -155,6 +175,8 @@ SOCKS5 proxy ready on 127.0.0.1:4447
 | `-no-upnp` | Disable UPnP automatic port forwarding |
 
 ### Examples
+
+> On Windows, replace `./anon-router` with `.\anon-router.exe` (PowerShell) or `./anon-router.exe` (Git Bash).
 
 ```bash
 # Just run (connects to seed, auto-discovers peers)
@@ -286,7 +308,17 @@ pkg/
   util/
     config.go            # Configuration
     logger.go            # Logging
+    sockopt_unix.go      # SO_REUSEADDR for Linux/macOS
+    sockopt_windows.go   # SO_REUSEADDR for Windows
 ```
+
+## Supported Platforms
+
+| OS | Architecture | Status |
+|----|-------------|--------|
+| Linux | amd64, arm64 | ✅ Fully supported |
+| macOS | amd64 (Intel), arm64 (Apple Silicon) | ✅ Fully supported |
+| Windows | amd64 | ✅ Fully supported |
 
 ## Requirements
 

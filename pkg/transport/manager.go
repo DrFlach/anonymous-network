@@ -16,6 +16,7 @@ import (
     "network/pkg/util"
 )
 
+
 // PeerConnection represents a connection to a peer
 type PeerConnection struct {
     Conn         *ntcp2.Connection
@@ -150,9 +151,14 @@ func (m *Manager) Start(listenAddr string) error {
 
     lc := net.ListenConfig{
         Control: func(network, address string, c syscall.RawConn) error {
-            return c.Control(func(fd uintptr) {
-                syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+            var opErr error
+            err := c.Control(func(fd uintptr) {
+                opErr = util.SetReuseAddr(fd)
             })
+            if err != nil {
+                return err
+            }
+            return opErr
         },
     }
     listener, err := lc.Listen(context.Background(), "tcp", listenAddr)

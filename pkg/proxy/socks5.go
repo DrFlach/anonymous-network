@@ -86,9 +86,14 @@ func NewSOCKS5Server(config *SOCKS5Config, tunnelPool *tunnel.Pool, outproxy *Ou
 func (s *SOCKS5Server) Start() error {
 	lc := net.ListenConfig{
 		Control: func(network, address string, c syscall.RawConn) error {
-			return c.Control(func(fd uintptr) {
-				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				opErr = util.SetReuseAddr(fd)
 			})
+			if err != nil {
+				return err
+			}
+			return opErr
 		},
 	}
 	listener, err := lc.Listen(context.Background(), "tcp", s.listenAddr)
