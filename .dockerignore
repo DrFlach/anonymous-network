@@ -1,0 +1,11 @@
+.git
+.gitignore
+.vscode
+*.log
+anon-router
+anon-router-linux
+identity.json
+config.json
+router.dat
+**/.DS_Store
+**/.vagrant

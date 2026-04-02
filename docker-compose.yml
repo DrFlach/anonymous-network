@@ -1,0 +1,21 @@
+services:
+  anon-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: anonymous-network:latest
+    container_name: anon-router
+    restart: unless-stopped
+    ports:
+      - "7656:7656/tcp"
+      - "4447:4447/tcp"
+    volumes:
+      - ./data:/data
+    command:
+      - "-config"
+      - "/data/config.json"
+      - "-listen"
+      - "0.0.0.0:7656"
+      - "-socks"
+      - "0.0.0.0:4447"
+      - "-no-upnp"

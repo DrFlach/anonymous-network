@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -371,13 +372,29 @@ func republishRouterInfo(identity *crypto.RouterIdentity, externalIP string, lis
 }
 
 func parseAddr(addr string) (string, int) {
-	host := "127.0.0.1"
+	host := "0.0.0.0"
 	port := 7656
 
-	parts := strings.Split(addr, ":")
-	if len(parts) == 2 {
-		host = parts[0]
-		fmt.Sscanf(parts[1], "%d", &port)
+	if h, p, err := net.SplitHostPort(addr); err == nil {
+		host = strings.TrimSpace(h)
+		fmt.Sscanf(p, "%d", &port)
+	}
+
+	// Never publish wildcard/unspecified addresses in RouterInfo.
+	// If listening on 0.0.0.0/::, advertise best local interface IP instead.
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		conn, err := net.Dial("udp", "1.1.1.1:53")
+		if err == nil {
+			if la, ok := conn.LocalAddr().(*net.UDPAddr); ok {
+				if ip := la.IP; ip != nil && !ip.IsUnspecified() && !ip.IsLoopback() {
+					host = ip.String()
+				}
+			}
+			_ = conn.Close()
+		}
+	}
+	if host == "" {
+		host = "127.0.0.1"
 	}
 
 	return host, port

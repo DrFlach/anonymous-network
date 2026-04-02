@@ -50,6 +50,53 @@ go build -o anon-router.exe ./cmd/router/
 ./anon-router.exe
 ```
 
+## Alternative: run in Docker
+
+If you prefer to keep everything isolated, run the router in a container.
+The repository already includes [Dockerfile](Dockerfile) and [docker-compose.yml](docker-compose.yml).
+
+### Option A — plain Docker
+
+Build the image:
+
+```bash
+docker build -t anonymous-network:latest .
+```
+
+Start the router:
+
+```bash
+docker run -d \
+  --name anon-router \
+  --restart unless-stopped \
+  -p 7656:7656/tcp \
+  -p 4447:4447/tcp \
+  -v $(pwd)/data:/data \
+  anonymous-network:latest
+```
+
+Useful commands:
+
+```bash
+docker logs -f anon-router
+docker stop anon-router
+docker rm anon-router
+```
+
+### Option B — Docker Compose (recommended)
+
+```bash
+docker compose up -d --build
+docker compose logs -f
+docker compose down
+```
+
+The `./data` folder is mounted into the container as `/data`, so your `identity.json`
+and `config.json` stay persistent between restarts.
+
+> Linux note: if you get `permission denied` for `/var/run/docker.sock`, run commands with `sudo`
+> or add your user to the `docker` group and re-login.
+
 That's it. The router will:
 - Generate a unique identity (saved to `identity.json`)
 - Connect to the seed node (`34.118.110.89:7656`)
