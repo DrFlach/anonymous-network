@@ -91,6 +91,15 @@ type IncomingMessage struct {
 	ReceivedAt time.Time
 }
 
+// isUsableIP checks whether an IP is meaningful for peer exchange/connectivity.
+// It rejects wildcard/unspecified, loopback, link-local and multicast addresses.
+func isUsableIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsMulticast()
+}
+
 // NewManager creates a new transport manager
 func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
 	return &Manager{
@@ -303,6 +312,12 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 	routerHash := ntcpConn.RemoteRouterHash()
 	hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
 
+	// Never keep self-connections (e.g. wildcard gossip / NAT hairpin).
+	if routerHash == m.identity.RouterHash {
+		m.logger.Debug("Dropping self-connection from %s", conn.RemoteAddr())
+		return
+	}
+
 	peer := &PeerConnection{
 		Conn:         ntcpConn,
 		RouterHash:   routerHash,
@@ -388,6 +403,12 @@ func (m *Manager) ConnectTo(address string) error {
 	// Get the real router hash from the handshake
 	routerHash := ntcpConn.RemoteRouterHash()
 	hashStr := base64.RawStdEncoding.EncodeToString(routerHash[:8])
+
+	// Guard against dialing ourselves.
+	if routerHash == m.identity.RouterHash {
+		conn.Close()
+		return nil
+	}
 
 	peer := &PeerConnection{
 		Conn:         ntcpConn,
@@ -740,7 +761,7 @@ func isShareableAddr(addr string, targetIPs []net.IP) bool {
 		return false
 	}
 	ip := net.ParseIP(h)
-	if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+	if !isUsableIP(ip) {
 		return false
 	}
 	// Filter CGNAT range (100.64.0.0/10)
@@ -827,7 +848,7 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
 			continue
 		}
 		ip := net.ParseIP(h)
-		if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		if !isUsableIP(ip) {
 			continue
 		}
 		validAddrs = append(validAddrs, a)
@@ -1019,10 +1040,7 @@ func (m *Manager) isReachableAddr(addr string) bool {
 		return false
 	}
 	ip := net.ParseIP(host)
-	if ip == nil {
-		return false
-	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+	if !isUsableIP(ip) {
 		return false
 	}
 	// Also filter CGNAT range (100.64.0.0/10) — used by Tailscale, carrier-grade NAT, etc.
@@ -1198,7 +1216,7 @@ func (m *Manager) sendYourIP(peer *PeerConnection) {
 	}
 	// Only send if it looks like a real external IP (not loopback or link-local)
 	ip := net.ParseIP(host)
-	if ip == nil || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+	if !isUsableIP(ip) {
 		return
 	}
 	msg := router.NewMessage(router.MsgTypeYourIP, []byte(host))
@@ -1220,7 +1238,7 @@ func (m *Manager) HandleYourIP(payload []byte) {
 	}
 	ipStr := strings.TrimSpace(string(payload))
 	ip := net.ParseIP(ipStr)
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() {
+	if !isUsableIP(ip) || ip.IsPrivate() {
 		return // only accept real public IPs
 	}
 
@@ -1374,11 +1392,14 @@ func (m *Manager) trackKnownNode(addr string) bool {
 	if addr == "" {
 		return false
 	}
-	// Skip loopback
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		if h == "127.0.0.1" || h == "::1" {
-			return false
-		}
+	// Validate and skip unusable hosts (0.0.0.0, loopback, multicast, etc).
+	h, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(h)
+	if !isUsableIP(ip) {
+		return false
 	}
 	m.knownNodesMu.Lock()
 	defer m.knownNodesMu.Unlock()
