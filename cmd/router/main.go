@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -36,6 +38,7 @@ func main() {
 	noUPnP := flag.Bool("no-upnp", false, "Disable UPnP auto port forwarding")
 	verify := flag.Bool("verify", false, "Run encryption self-test and exit")
 	joinAddr := flag.String("join", "", "Connect to an existing peer (ip:port) to join the network")
+	doctor := flag.Bool("doctor", false, "Run local diagnostics and exit")
 
 	flag.Parse()
 
@@ -48,6 +51,11 @@ func main() {
 	// Handle verify mode — quick self-test of encryption subsystems
 	if *verify {
 		runVerification(logger)
+		return
+	}
+
+	if *doctor {
+		runDoctor(*configPath, logger)
 		return
 	}
 
@@ -144,10 +152,11 @@ func main() {
 
 	// Create outproxy
 	outproxyConfig := &proxy.OutproxyConfig{
-		Enabled:      config.OutproxyEnabled,
-		ConnTimeout:  30 * time.Second,
-		BlockedHosts: config.BlockedHosts,
-		DNSServers:   config.DNSServers,
+		Enabled:       config.OutproxyEnabled,
+		ConnTimeout:   30 * time.Second,
+		BlockedHosts:  config.BlockedHosts,
+		DNSServers:    config.DNSServers,
+		StrictDNSOnly: config.StrictDNSOnly,
 	}
 	outproxy := proxy.NewOutproxy(outproxyConfig)
 
@@ -187,6 +196,25 @@ func main() {
 		if seed != "" {
 			cleanSeeds = append(cleanSeeds, seed)
 		}
+	}
+
+	// If seed list is too small, fetch additional bootstrap seeds from configured URLs.
+	if len(cleanSeeds) < config.MinSeedRouters {
+		needed := config.MinSeedRouters - len(cleanSeeds)
+		if needed < 1 {
+			needed = 1
+		}
+		fetched := fetchBootstrapSeeds(config.BootstrapSeedURLs, needed*3, 6*time.Second, logger)
+		if len(fetched) > 0 {
+			cleanSeeds = append(cleanSeeds, fetched...)
+		}
+	}
+
+	cleanSeeds = dedupeAddrs(cleanSeeds)
+	if len(cleanSeeds) == 0 {
+		logger.Warn("No seed routers configured. Use -join <addr> or set seed_routers/bootstrap_seed_urls in config.json")
+	} else {
+		logger.Info("Using %d seed routers", len(cleanSeeds))
 	}
 
 	// Register seeds for auto-reconnection
@@ -294,8 +322,31 @@ func loadOrCreateConfig(path string) (*util.Config, error) {
 			return nil, err
 		}
 		util.GetLogger().Info("Created default config at %s", path)
+		return config, nil
 	}
+
+	applyConfigDefaults(config)
 	return config, nil
+}
+
+func applyConfigDefaults(config *util.Config) {
+	def := util.DefaultConfig()
+
+	if len(config.SeedRouters) == 0 {
+		config.SeedRouters = append([]string{}, def.SeedRouters...)
+	}
+	if len(config.BootstrapSeedURLs) == 0 {
+		config.BootstrapSeedURLs = append([]string{}, def.BootstrapSeedURLs...)
+	}
+	if config.MinSeedRouters <= 0 {
+		config.MinSeedRouters = def.MinSeedRouters
+	}
+	if len(config.DNSServers) == 0 {
+		config.DNSServers = append([]string{}, def.DNSServers...)
+	}
+	if config.IdentityFile == "" {
+		config.IdentityFile = def.IdentityFile
+	}
 }
 
 func publishRouterInfo(identity *crypto.RouterIdentity, listenAddr string, netDB *netdb.Store, floodfillMgr *netdb.FloodfillManager, config *util.Config, logger *util.Logger) {
@@ -599,6 +650,113 @@ func statusReporter(transportMgr *transport.Manager, tunnelPool *tunnel.Pool, ne
 			}
 		}
 	}
+}
+
+func dedupeAddrs(addrs []string) []string {
+	seen := make(map[string]bool, len(addrs))
+	out := make([]string, 0, len(addrs))
+	for _, a := range addrs {
+		a = strings.TrimSpace(a)
+		if a == "" || seen[a] {
+			continue
+		}
+		seen[a] = true
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func fetchBootstrapSeeds(urls []string, maxCount int, timeout time.Duration, logger *util.Logger) []string {
+	if len(urls) == 0 || maxCount <= 0 {
+		return nil
+	}
+
+	client := &http.Client{Timeout: timeout}
+	var collected []string
+
+	for _, u := range urls {
+		u = strings.TrimSpace(u)
+		if u == "" {
+			continue
+		}
+		resp, err := client.Get(u)
+		if err != nil {
+			logger.Debug("Bootstrap seeds fetch failed for %s: %v", u, err)
+			continue
+		}
+		func() {
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				logger.Debug("Bootstrap seeds fetch failed for %s: HTTP %d", u, resp.StatusCode)
+				return
+			}
+			body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+			if err != nil {
+				logger.Debug("Bootstrap seeds read failed for %s: %v", u, err)
+				return
+			}
+			lines := strings.Split(string(body), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if _, _, err := net.SplitHostPort(line); err != nil {
+					continue
+				}
+				collected = append(collected, line)
+				if len(collected) >= maxCount {
+					return
+				}
+			}
+		}()
+		if len(collected) >= maxCount {
+			break
+		}
+	}
+
+	return dedupeAddrs(collected)
+}
+
+func runDoctor(configPath string, logger *util.Logger) {
+	fmt.Println("╔═══════════════════════════════════════════════╗")
+	fmt.Println("║  Anonymous Network — Local Doctor             ║")
+	fmt.Println("╚═══════════════════════════════════════════════╝")
+
+	config, err := loadOrCreateConfig(configPath)
+	if err != nil {
+		fmt.Printf("❌ Config: FAIL (%v)\n", err)
+		return
+	}
+	fmt.Printf("✅ Config: %s\n", configPath)
+
+	identityPath := config.IdentityFile
+	if !filepath.IsAbs(identityPath) {
+		identityPath = filepath.Join(filepath.Dir(configPath), identityPath)
+	}
+	if st, err := os.Stat(identityPath); err == nil {
+		perm := st.Mode().Perm()
+		if perm&0o077 != 0 {
+			fmt.Printf("⚠️  Identity permissions too open: %s (want 600)\n", perm.String())
+		} else {
+			fmt.Printf("✅ Identity permissions: %s\n", perm.String())
+		}
+	} else {
+		fmt.Printf("ℹ️  Identity file not found yet: %s (will be created on first run)\n", identityPath)
+	}
+
+	seedCount := len(dedupeAddrs(config.SeedRouters))
+	fetched := fetchBootstrapSeeds(config.BootstrapSeedURLs, 10, 5*time.Second, logger)
+	fmt.Printf("ℹ️  Static seeds: %d, bootstrap fetched: %d\n", seedCount, len(fetched))
+
+	if config.StrictDNSOnly {
+		fmt.Println("✅ DNS mode: strict DoH only (no system DNS fallback)")
+	} else {
+		fmt.Println("⚠️  DNS mode: fallback enabled (possible DNS leaks if DoH fails)")
+	}
+
+	fmt.Println("Done.")
 }
 
 // runVerification performs a self-test of all encryption and privacy subsystems

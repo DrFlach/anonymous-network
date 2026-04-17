@@ -1,6 +1,9 @@
 package netdb
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
 	"testing"
 	"time"
 )
@@ -193,4 +196,58 @@ func TestSerializeDeserializeRouterInfoBatch(t *testing.T) {
 		t.Fatalf("DeserializeRouterInfoBatch error: %v", err)
 	}
 	t.Logf("Deserialized %d valid RouterInfos from batch (unsigned entries skipped)", len(result))
+}
+
+func TestStore_AddRejectsMismatchedRouterHash(t *testing.T) {
+	store := NewStore()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var fakeHash [32]byte
+	fakeHash[0] = 0xAA
+	var encPub [32]byte
+	encPub[0] = 0xBB
+
+	ri := NewRouterInfo(fakeHash, pub, encPub)
+	ri.AddAddress("203.0.113.10", 7656)
+	ri.SetCapability("reachable", true)
+	ri.Sign(priv)
+
+	if err := store.Add(ri); err == nil {
+		t.Fatal("expected Add() to reject mismatched RouterHash")
+	}
+}
+
+func TestStore_MergeSkipsMismatchedRouterHash(t *testing.T) {
+	store := NewStore()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	goodHash := sha256.Sum256(pub)
+
+	var encPub [32]byte
+	encPub[0] = 0xCC
+
+	good := NewRouterInfo(goodHash, pub, encPub)
+	good.AddAddress("198.51.100.20", 7656)
+	good.SetCapability("reachable", true)
+	good.Sign(priv)
+
+	badHash := goodHash
+	badHash[0] ^= 0xFF
+	bad := NewRouterInfo(badHash, pub, encPub)
+	bad.AddAddress("198.51.100.21", 7656)
+	bad.SetCapability("reachable", true)
+	bad.Sign(priv)
+
+	added := store.MergeRouterInfos([]*RouterInfo{good, bad})
+	if added != 1 {
+		t.Fatalf("expected exactly 1 RouterInfo added, got %d", added)
+	}
+	if store.Count() != 1 {
+		t.Fatalf("expected store count 1, got %d", store.Count())
+	}
 }

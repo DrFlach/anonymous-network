@@ -54,6 +54,10 @@ if [ ! -f config.json ]; then
   "listen_address": "0.0.0.0",
   "listen_port": $LISTEN_PORT,
   "seed_routers": ["$VPS_SEED"],
+    "bootstrap_seed_urls": [
+        "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"
+    ],
+    "min_seed_routers": 3,
   "router_info_file": "router.dat",
   "identity_file": "identity.json",
   "max_connections": 200,
@@ -65,6 +69,7 @@ if [ ! -f config.json ]; then
   "socks5_enabled": true,
   "socks5_address": "127.0.0.1:$SOCKS_PORT",
   "outproxy_enabled": true,
+    "strict_dns_only": true,
   "dns_servers": [
     "https://1.1.1.1/dns-query",
     "https://dns.google/resolve",

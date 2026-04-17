@@ -100,6 +100,27 @@ func isUsableIP(ip net.IP) bool {
 	return !ip.IsUnspecified() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsMulticast()
 }
 
+func isPublicRoutableAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !isUsableIP(ip) {
+		return false
+	}
+	if ip.IsPrivate() {
+		return false
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		// Exclude CGNAT 100.64.0.0/10
+		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // NewManager creates a new transport manager
 func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
 	return &Manager{
@@ -124,7 +145,31 @@ func NewManager(identity *crypto.RouterIdentity, maxPeers int) *Manager {
 func (m *Manager) SetSeeds(seeds []string) {
 	m.seedMu.Lock()
 	defer m.seedMu.Unlock()
-	m.seedAddrs = seeds
+	uniq := make(map[string]bool, len(seeds))
+	m.seedAddrs = m.seedAddrs[:0]
+	for _, s := range seeds {
+		s = strings.TrimSpace(s)
+		if s == "" || uniq[s] {
+			continue
+		}
+		uniq[s] = true
+		m.seedAddrs = append(m.seedAddrs, s)
+	}
+}
+
+func (m *Manager) addSeedAddr(addr string) {
+	addr = strings.TrimSpace(addr)
+	if addr == "" || !isPublicRoutableAddr(addr) {
+		return
+	}
+	m.seedMu.Lock()
+	defer m.seedMu.Unlock()
+	for _, s := range m.seedAddrs {
+		if s == addr {
+			return
+		}
+	}
+	m.seedAddrs = append(m.seedAddrs, addr)
 }
 
 // SetNetDB sets the NetDB reference for cross-network peer exchange.
@@ -340,6 +385,7 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 
 	m.logger.Info("Handshake OK with %s (hash: %s)", conn.RemoteAddr(), hashStr)
 	m.logger.Info("Peer connected: %s [%s] (total: %d)", peer.Address, hashStr, m.GetPeerCount())
+	m.addSeedAddr(peer.Address)
 
 	// Tell the remote peer what their external IP looks like to us (STUN-like)
 	m.sendYourIP(peer)
@@ -433,6 +479,7 @@ func (m *Manager) ConnectTo(address string) error {
 
 	m.logger.Info("Handshake OK with %s (hash: %s)", address, hashStr)
 	m.logger.Info("Peer connected: %s [%s] (total: %d)", address, hashStr, m.GetPeerCount())
+	m.addSeedAddr(address)
 
 	// Tell the remote peer what their external IP looks like to us (STUN-like)
 	m.sendYourIP(peer)
@@ -999,6 +1046,7 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
 			}
 			m.mu.Unlock()
 			m.trackKnownNode(listenAddr)
+			m.addSeedAddr(listenAddr)
 		} else {
 			// Peer address learned via gossip — store AND try to connect.
 			// Even if we can't connect (peer behind NAT), we store it in
@@ -1283,11 +1331,7 @@ func (m *Manager) relaySend(destHash [32]byte, data []byte) error {
 
 	// Try to send through any connected peer (prefer seeds / floodfill)
 	m.mu.RLock()
-	var relayPeer *PeerConnection
-	for _, p := range m.peers {
-		relayPeer = p
-		break // pick first available; TODO: prefer floodfill
-	}
+	relayPeer := m.selectBestRelayPeerLocked(destHash)
 	m.mu.RUnlock()
 
 	if relayPeer == nil {
@@ -1733,6 +1777,10 @@ func (m *Manager) requestRelayForPeer(destHash [32]byte) {
 			}
 		}
 	}
+	if best := m.selectBestRelayPeerLocked(destHash); best != nil {
+		bridgeHash = best.RouterHash
+		found = true
+	}
 	m.mu.RUnlock()
 
 	if !found {
@@ -1740,4 +1788,49 @@ func (m *Manager) requestRelayForPeer(destHash [32]byte) {
 	}
 
 	m.RequestRelayCircuit(bridgeHash, destHash)
+}
+
+// selectBestRelayPeerLocked chooses a relay/bridge peer with highest score.
+// Caller must hold m.mu.RLock()/m.mu.Lock().
+func (m *Manager) selectBestRelayPeerLocked(destHash [32]byte) *PeerConnection {
+	var best *PeerConnection
+	bestScore := -1
+
+	isSeed := make(map[string]bool)
+	m.seedMu.Lock()
+	for _, s := range m.seedAddrs {
+		isSeed[s] = true
+	}
+	m.seedMu.Unlock()
+
+	for hash, p := range m.peers {
+		if hash == destHash {
+			continue
+		}
+		score := 0
+		if isPublicRoutableAddr(p.Address) {
+			score += 50
+		}
+		if isSeed[p.Address] {
+			score += 20
+		}
+
+		if m.netDB != nil {
+			if ri, err := m.netDB.Get(hash); err == nil {
+				if ri.Capabilities["bridge"] {
+					score += 100
+				}
+				if ri.Capabilities["floodfill"] {
+					score += 40
+				}
+			}
+		}
+
+		if score > bestScore {
+			bestScore = score
+			best = p
+		}
+	}
+
+	return best
 }

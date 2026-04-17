@@ -30,19 +30,21 @@ type OutproxyConfig struct {
 	ConnTimeout   time.Duration
 	BlockedHosts  []string
 	DNSServers    []string // DNS-over-HTTPS servers
+	StrictDNSOnly bool     // If true, disable system DNS fallback
 }
 
 // DefaultOutproxyConfig returns sensible defaults
 func DefaultOutproxyConfig() *OutproxyConfig {
 	return &OutproxyConfig{
-		Enabled:     true,
-		ConnTimeout: 30 * time.Second,
+		Enabled:      true,
+		ConnTimeout:  30 * time.Second,
 		BlockedHosts: []string{},
 		DNSServers: []string{
 			"https://1.1.1.1/dns-query",       // Cloudflare
-			"https://dns.google/dns-query",     // Google
-			"https://dns.quad9.net/dns-query",  // Quad9
+			"https://dns.google/dns-query",    // Google
+			"https://dns.quad9.net/dns-query", // Quad9
 		},
+		StrictDNSOnly: true,
 	}
 }
 
@@ -53,7 +55,7 @@ func NewOutproxy(config *OutproxyConfig) *Outproxy {
 		blocked[h] = true
 	}
 
-	resolver := NewSecureDNSResolver(config.DNSServers)
+	resolver := NewSecureDNSResolverWithPolicy(config.DNSServers, config.StrictDNSOnly)
 
 	return &Outproxy{
 		enabled: config.Enabled,

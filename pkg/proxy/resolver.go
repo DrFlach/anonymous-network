@@ -22,6 +22,7 @@ type SecureDNSResolver struct {
 	cache      map[string]*dnsEntry
 	cacheMu    sync.RWMutex
 	cacheTTL   time.Duration
+	strictOnly bool
 	logger     *util.Logger
 }
 
@@ -32,12 +33,12 @@ type dnsEntry struct {
 
 // DoH response structures
 type dohResponse struct {
-	Status   int          `json:"Status"`
-	TC       bool         `json:"TC"`
-	RD       bool         `json:"RD"`
-	RA       bool         `json:"RA"`
-	AD       bool         `json:"AD"`
-	CD       bool         `json:"CD"`
+	Status   int           `json:"Status"`
+	TC       bool          `json:"TC"`
+	RD       bool          `json:"RD"`
+	RA       bool          `json:"RA"`
+	AD       bool          `json:"AD"`
+	CD       bool          `json:"CD"`
 	Question []dohQuestion `json:"Question"`
 	Answer   []dohAnswer   `json:"Answer"`
 }
@@ -56,6 +57,12 @@ type dohAnswer struct {
 
 // NewSecureDNSResolver creates a new secure DNS resolver
 func NewSecureDNSResolver(servers []string) *SecureDNSResolver {
+	return NewSecureDNSResolverWithPolicy(servers, false)
+}
+
+// NewSecureDNSResolverWithPolicy creates a new secure DNS resolver with explicit fallback policy.
+// If strictOnly=true, system DNS fallback is disabled to prevent DNS leaks.
+func NewSecureDNSResolverWithPolicy(servers []string, strictOnly bool) *SecureDNSResolver {
 	if len(servers) == 0 {
 		servers = []string{
 			"https://1.1.1.1/dns-query",
@@ -80,9 +87,10 @@ func NewSecureDNSResolver(servers []string) *SecureDNSResolver {
 			Transport: transport,
 			Timeout:   15 * time.Second,
 		},
-		cache:    make(map[string]*dnsEntry),
-		cacheTTL: 5 * time.Minute,
-		logger:   util.GetLogger(),
+		cache:      make(map[string]*dnsEntry),
+		cacheTTL:   5 * time.Minute,
+		strictOnly: strictOnly,
+		logger:     util.GetLogger(),
 	}
 }
 
@@ -110,7 +118,14 @@ func (r *SecureDNSResolver) Resolve(hostname string) (string, error) {
 		return ip, nil
 	}
 
-	// Fallback: try Go's built-in resolver as last resort
+	if r.strictOnly {
+		if lastErr != nil {
+			return "", fmt.Errorf("all DoH servers failed (strict mode enabled): %w", lastErr)
+		}
+		return "", fmt.Errorf("all DoH servers failed (strict mode enabled)")
+	}
+
+	// Fallback: try Go's built-in resolver as last resort (non-strict mode)
 	addrs, err := net.LookupHost(hostname)
 	if err != nil {
 		if lastErr != nil {

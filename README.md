@@ -1,6 +1,6 @@
 # Anonymous P2P Network
 
-A fully functional anonymous peer-to-peer network with onion routing, garlic encryption, automatic peer discovery, and a SOCKS5 proxy for private internet browsing. Written in Go with zero external dependencies.
+A fully functional anonymous peer-to-peer network with onion routing, garlic encryption, automatic peer discovery, and a SOCKS5 proxy for private internet browsing. Written in Go.
 
 ## Features
 
@@ -12,6 +12,8 @@ A fully functional anonymous peer-to-peer network with onion routing, garlic enc
 - **UPnP auto port forwarding** — opens your router port automatically so others can connect to you
 - **Relay forwarding** — peers behind NAT can still participate via relay through public nodes
 - **Floodfill DHT** — distributed router database, no central server required
+- **Bootstrap seed lists** — fetch extra seeds from URL to avoid single-point bootstrap
+- **Strict DoH mode** — optional DNS policy without system-DNS fallback
 - **Zero config** — just build and run, everything works out of the box
 
 ## Quick Start — Join the Network
@@ -99,6 +101,7 @@ and `config.json` stay persistent between restarts.
 
 That's it. The router will:
 - Generate a unique identity (saved to `identity.json`)
+- Save identity with secure file mode (`0600`)
 - Connect to the seed node (`34.118.110.89:7656`)
 - Discover other peers automatically
 - Try to open your router port via UPnP
@@ -212,6 +215,7 @@ SOCKS5 proxy ready on 127.0.0.1:4447
 | `-config <path>` | Path to configuration file (default: `config.json`) |
 | `-keygen` | Generate a new router identity and exit |
 | `-verify` | Run encryption self-test and exit |
+| `-doctor` | Run local diagnostics (config/identity/seeds/DNS mode) and exit |
 | `-listen <addr>` | Override listen address (e.g. `0.0.0.0:7656`) |
 | `-seeds <addrs>` | Comma-separated seed router addresses |
 | `-join <addr>` | Connect to a specific peer to join the network |
@@ -256,6 +260,10 @@ A `config.json` file is created automatically on first run. You can customize it
   "seed_routers": [
     "34.118.110.89:7656"
   ],
+  "bootstrap_seed_urls": [
+    "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"
+  ],
+  "min_seed_routers": 3,
   "identity_file": "identity.json",
   "max_connections": 200,
   "is_floodfill": false,
@@ -266,6 +274,7 @@ A `config.json` file is created automatically on first run. You can customize it
   "socks5_enabled": true,
   "socks5_address": "127.0.0.1:4447",
   "outproxy_enabled": true,
+  "strict_dns_only": true,
   "disable_upnp": false,
   "dns_servers": [
     "https://1.1.1.1/dns-query",
@@ -370,7 +379,7 @@ pkg/
 ## Requirements
 
 - **Go 1.21+**
-- No external dependencies (stdlib only)
+- Uses Go standard library + `golang.org/x/crypto`
 
 ## License
 

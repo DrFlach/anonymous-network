@@ -4,6 +4,10 @@
   "seed_routers": [
     "34.118.110.89:7656"
   ],
+  "bootstrap_seed_urls": [
+    "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"
+  ],
+  "min_seed_routers": 3,
   "identity_file": "identity.json",
   "max_connections": 200,
   "is_floodfill": true,
@@ -14,6 +18,7 @@
   "socks5_enabled": true,
   "socks5_address": "127.0.0.1:4447",
   "outproxy_enabled": true,
+  "strict_dns_only": true,
   "dns_servers": [
     "https://1.1.1.1/dns-query",
     "https://dns.google/resolve",
