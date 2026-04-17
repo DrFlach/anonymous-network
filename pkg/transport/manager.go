@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -22,6 +23,7 @@ type PeerConnection struct {
 	Conn         *ntcp2.Connection
 	RouterHash   [32]byte
 	Address      string
+	Initiated    bool     // true if we initiated (outbound), false if inbound
 	ListenAddrs  []string // announced reachable listen addresses
 	Connected    time.Time
 	LastActivity time.Time
@@ -170,6 +172,30 @@ func (m *Manager) addSeedAddr(addr string) {
 		}
 	}
 	m.seedAddrs = append(m.seedAddrs, addr)
+}
+
+// prefersOutboundFor returns deterministic preference for duplicate connection direction.
+// Node with lexicographically smaller RouterHash keeps outbound; larger keeps inbound.
+// This guarantees both sides converge to exactly one surviving TCP connection.
+func (m *Manager) prefersOutboundFor(remoteHash [32]byte) bool {
+	return bytes.Compare(m.identity.RouterHash[:], remoteHash[:]) < 0
+}
+
+// shouldUseNewDuplicate decides whether newcomer should replace existing duplicate connection.
+// Caller must hold m.mu lock.
+func (m *Manager) shouldUseNewDuplicate(existing, newcomer *PeerConnection) bool {
+	preferOutbound := m.prefersOutboundFor(existing.RouterHash)
+
+	// If directions differ, pick deterministic preferred direction.
+	if existing.Initiated != newcomer.Initiated {
+		if newcomer.Initiated == preferOutbound {
+			return true
+		}
+		return false
+	}
+
+	// Same direction duplicate: prefer the newer (newcomer) to recover stale half-open states.
+	return true
 }
 
 // SetNetDB sets the NetDB reference for cross-network peer exchange.
@@ -367,6 +393,7 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 		Conn:         ntcpConn,
 		RouterHash:   routerHash,
 		Address:      conn.RemoteAddr().String(),
+		Initiated:    false,
 		Connected:    time.Now(),
 		LastActivity: time.Now(),
 	}
@@ -378,9 +405,14 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 	// thinks old connection is alive and would otherwise reject all reconnect attempts.
 	m.mu.Lock()
 	if existing, exists := m.peers[routerHash]; exists {
+		if !m.shouldUseNewDuplicate(existing, peer) {
+			m.mu.Unlock()
+			m.logger.Debug("Keeping existing connection for peer %s, dropping duplicate newcomer", hashStr)
+			return
+		}
 		delete(m.peersByAddr, existing.Address)
 		_ = existing.Conn.Close()
-		m.logger.Info("Replacing stale duplicate connection for peer %s", hashStr)
+		m.logger.Info("Replacing duplicate connection for peer %s with preferred direction", hashStr)
 	}
 	m.peers[routerHash] = peer
 	m.peersByAddr[peer.Address] = peer
@@ -463,6 +495,7 @@ func (m *Manager) ConnectTo(address string) error {
 		Conn:         ntcpConn,
 		RouterHash:   routerHash,
 		Address:      address,
+		Initiated:    true,
 		ListenAddrs:  []string{address}, // outbound: we know the real listen address
 		Connected:    time.Now(),
 		LastActivity: time.Now(),
@@ -473,9 +506,15 @@ func (m *Manager) ConnectTo(address string) error {
 	// IMPORTANT: if duplicate hash exists, replace old connection with this fresh one.
 	m.mu.Lock()
 	if existing, hashExists := m.peers[routerHash]; hashExists {
+		if !m.shouldUseNewDuplicate(existing, peer) {
+			m.mu.Unlock()
+			conn.Close()
+			m.logger.Debug("Keeping existing connection for peer %s, dropping duplicate newcomer", hashStr)
+			return nil
+		}
 		delete(m.peersByAddr, existing.Address)
 		_ = existing.Conn.Close()
-		m.logger.Info("Replacing stale duplicate connection for peer %s", hashStr)
+		m.logger.Info("Replacing duplicate connection for peer %s with preferred direction", hashStr)
 	}
 	m.peers[routerHash] = peer
 	m.peersByAddr[address] = peer
