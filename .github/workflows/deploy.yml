@@ -1,18 +1,23 @@
 name: Build & Deploy to VPS
 
-# Запускается при push в main
+
 on:
-  push:
+  workflow_run:
+    workflows: ["CI Quality Gates"]
     branches: [main]
-  # Можно также запустить вручную из GitHub UI
+    types: [completed]
+
   workflow_dispatch:
 
 jobs:
   deploy:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
