@@ -373,11 +373,14 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 
 	// Atomic check-and-add: prevent TOCTOU race where two connections
 	// with the same router hash both pass the check before either adds.
+	// IMPORTANT: if a duplicate hash already exists, replace old connection with new.
+	// This fixes stale half-open sessions (common across NATs), where remote side still
+	// thinks old connection is alive and would otherwise reject all reconnect attempts.
 	m.mu.Lock()
-	if _, exists := m.peers[routerHash]; exists {
-		m.mu.Unlock()
-		m.logger.Debug("Already connected to peer %s, dropping duplicate", hashStr)
-		return
+	if existing, exists := m.peers[routerHash]; exists {
+		delete(m.peersByAddr, existing.Address)
+		_ = existing.Conn.Close()
+		m.logger.Info("Replacing stale duplicate connection for peer %s", hashStr)
 	}
 	m.peers[routerHash] = peer
 	m.peersByAddr[peer.Address] = peer
@@ -467,11 +470,12 @@ func (m *Manager) ConnectTo(address string) error {
 
 	// Atomic check-and-add: prevent TOCTOU race where two connections
 	// with the same router hash both pass the check before either adds.
+	// IMPORTANT: if duplicate hash exists, replace old connection with this fresh one.
 	m.mu.Lock()
-	if _, hashExists := m.peers[routerHash]; hashExists {
-		m.mu.Unlock()
-		conn.Close()
-		return nil // already connected via different address
+	if existing, hashExists := m.peers[routerHash]; hashExists {
+		delete(m.peersByAddr, existing.Address)
+		_ = existing.Conn.Close()
+		m.logger.Info("Replacing stale duplicate connection for peer %s", hashStr)
 	}
 	m.peers[routerHash] = peer
 	m.peersByAddr[address] = peer
