@@ -1,7 +1,6 @@
 package transport
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
@@ -174,27 +173,14 @@ func (m *Manager) addSeedAddr(addr string) {
 	m.seedAddrs = append(m.seedAddrs, addr)
 }
 
-// prefersOutboundFor returns deterministic preference for duplicate connection direction.
-// Node with lexicographically smaller RouterHash keeps outbound; larger keeps inbound.
-// This guarantees both sides converge to exactly one surviving TCP connection.
-func (m *Manager) prefersOutboundFor(remoteHash [32]byte) bool {
-	return bytes.Compare(m.identity.RouterHash[:], remoteHash[:]) < 0
-}
-
 // shouldUseNewDuplicate decides whether newcomer should replace existing duplicate connection.
 // Caller must hold m.mu lock.
 func (m *Manager) shouldUseNewDuplicate(existing, newcomer *PeerConnection) bool {
-	preferOutbound := m.prefersOutboundFor(existing.RouterHash)
-
-	// If directions differ, pick deterministic preferred direction.
-	if existing.Initiated != newcomer.Initiated {
-		if newcomer.Initiated == preferOutbound {
-			return true
-		}
-		return false
-	}
-
-	// Same direction duplicate: prefer the newer (newcomer) to recover stale half-open states.
+	_ = existing
+	_ = newcomer
+	// Always prefer the newest verified connection.
+	// This keeps the successful "replace stale/half-open session" behavior from b0ab647
+	// and prevents reconnect loops when peers disagree on preferred direction.
 	return true
 }
 
@@ -441,7 +427,9 @@ func (m *Manager) handleIncoming(conn net.Conn) {
 	if existing, ok := m.peers[routerHash]; ok && existing == peer {
 		delete(m.peers, routerHash)
 	}
-	delete(m.peersByAddr, peer.Address)
+	if existingByAddr, ok := m.peersByAddr[peer.Address]; ok && existingByAddr == peer {
+		delete(m.peersByAddr, peer.Address)
+	}
 	m.mu.Unlock()
 
 	// Clean up relay circuits involving this peer
@@ -540,12 +528,27 @@ func (m *Manager) ConnectTo(address string) error {
 		defer m.wg.Done()
 		m.receiveLoop(peer)
 
+		// Short-lived outbound sessions indicate unstable/remote-reset peers.
+		// Feed this into backoff to avoid 15s reconnect thrashing.
+		duration := time.Since(peer.Connected)
+		if m.backoff != nil {
+			if h, _, err := net.SplitHostPort(address); err == nil {
+				if duration < 20*time.Second {
+					m.backoff.RecordFailure(h)
+				} else {
+					m.backoff.RecordSuccess(h)
+				}
+			}
+		}
+
 		// Cleanup: only delete if THIS peer is still the registered one.
 		m.mu.Lock()
 		if existing, ok := m.peers[routerHash]; ok && existing == peer {
 			delete(m.peers, routerHash)
 		}
-		delete(m.peersByAddr, address)
+		if existingByAddr, ok := m.peersByAddr[address]; ok && existingByAddr == peer {
+			delete(m.peersByAddr, address)
+		}
 		m.mu.Unlock()
 
 		// Clean up relay circuits involving this peer
@@ -624,7 +627,16 @@ func (m *Manager) reconnectSeeds() {
 		if alreadyConnected {
 			continue
 		}
+
+		// Respect host backoff for flaky seeds that connect then immediately drop.
+		if m.backoff != nil && !m.backoff.ShouldConnect(seedHost) {
+			m.logger.Debug("Seed reconnect: %s in backoff, skipping", seed)
+			continue
+		}
 		if err := m.ConnectTo(seed); err != nil {
+			if m.backoff != nil {
+				m.backoff.RecordFailure(seedHost)
+			}
 			m.logger.Debug("Seed reconnect to %s: %v", seed, err)
 		}
 	}
