@@ -33,10 +33,10 @@ type Clove struct {
 
 // GarlicMessage represents a garlic-encrypted message containing multiple cloves
 type GarlicMessage struct {
-	MessageID  uint32
-	Cloves     []*Clove
+	MessageID   uint32
+	Cloves      []*Clove
 	Certificate []byte // Optional certificate (signing, etc.)
-	Expiration time.Time
+	Expiration  time.Time
 }
 
 // NewGarlicMessage creates a new garlic message

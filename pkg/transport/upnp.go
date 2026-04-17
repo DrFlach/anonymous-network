@@ -207,9 +207,9 @@ type upnpRoot struct {
 }
 
 type upnpDevice struct {
-	DeviceType  string         `xml:"deviceType"`
-	DeviceList  []upnpDevice   `xml:"deviceList>device"`
-	ServiceList []upnpService  `xml:"serviceList>service"`
+	DeviceType  string        `xml:"deviceType"`
+	DeviceList  []upnpDevice  `xml:"deviceList>device"`
+	ServiceList []upnpService `xml:"serviceList>service"`
 }
 
 type upnpService struct {

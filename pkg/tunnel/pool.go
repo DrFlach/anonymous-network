@@ -13,21 +13,21 @@ import (
 
 // Pool manages a pool of inbound and outbound tunnels
 type Pool struct {
-	identity        *crypto.RouterIdentity
-	netDB           *netdb.Store
-	builder         *TunnelBuilder
-	inbound         []*Tunnel
-	outbound        []*Tunnel
-	mu              sync.RWMutex
-	targetInbound   int
-	targetOutbound  int
-	tunnelLength    int
-	tunnelLifetime  time.Duration
-	logger          *util.Logger
-	stopChan        chan struct{}
-	wg              sync.WaitGroup
-	onBuildTunnel   func(tunnel *Tunnel, requests [][]byte) error // Callback to send build requests
-	participants    *TunnelParticipantStore
+	identity       *crypto.RouterIdentity
+	netDB          *netdb.Store
+	builder        *TunnelBuilder
+	inbound        []*Tunnel
+	outbound       []*Tunnel
+	mu             sync.RWMutex
+	targetInbound  int
+	targetOutbound int
+	tunnelLength   int
+	tunnelLifetime time.Duration
+	logger         *util.Logger
+	stopChan       chan struct{}
+	wg             sync.WaitGroup
+	onBuildTunnel  func(tunnel *Tunnel, requests [][]byte) error // Callback to send build requests
+	participants   *TunnelParticipantStore
 }
 
 // PoolConfig configures the tunnel pool

@@ -16,13 +16,13 @@ const MaxFloodTTL = 4
 
 // FloodfillManager handles the distributed hash table (DHT) for RouterInfo propagation
 type FloodfillManager struct {
-	store         *Store
-	isFloodfill   bool
-	logger        *util.Logger
-	mu            sync.RWMutex
-	sendFunc      func(routerHash [32]byte, data []byte) error // Callback to send data to a peer
-	knownHashes   map[[32]byte]time.Time                       // Track what we've seen to avoid loops
-	hashMu        sync.RWMutex
+	store       *Store
+	isFloodfill bool
+	logger      *util.Logger
+	mu          sync.RWMutex
+	sendFunc    func(routerHash [32]byte, data []byte) error // Callback to send data to a peer
+	knownHashes map[[32]byte]time.Time                       // Track what we've seen to avoid loops
+	hashMu      sync.RWMutex
 }
 
 // NewFloodfillManager creates a new floodfill manager

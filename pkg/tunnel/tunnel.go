@@ -42,16 +42,16 @@ type HopInfo struct {
 
 // Tunnel represents an established tunnel (chain of hops)
 type Tunnel struct {
-	ID          TunnelID
-	Direction   Direction
-	Hops        []*HopInfo
-	CreatedAt   time.Time
-	ExpiresAt   time.Time
-	LayerKeys   [][32]byte // Encryption keys in order (for onion encrypt/decrypt)
-	Gateway     [32]byte   // First hop router hash
-	Endpoint    [32]byte   // Last hop router hash
-	IsReady     bool
-	mu          sync.RWMutex
+	ID        TunnelID
+	Direction Direction
+	Hops      []*HopInfo
+	CreatedAt time.Time
+	ExpiresAt time.Time
+	LayerKeys [][32]byte // Encryption keys in order (for onion encrypt/decrypt)
+	Gateway   [32]byte   // First hop router hash
+	Endpoint  [32]byte   // Last hop router hash
+	IsReady   bool
+	mu        sync.RWMutex
 }
 
 // NewTunnel creates a new tunnel structure
@@ -164,8 +164,8 @@ type TunnelParticipant struct {
 	NextHop         [32]byte // Next router to forward to
 	LayerKey        [32]byte // Our decryption key for this tunnel
 	IVKey           [32]byte
-	IsEndpoint      bool     // True if we are the tunnel endpoint
-	IsGateway       bool     // True if we are the tunnel gateway
+	IsEndpoint      bool // True if we are the tunnel endpoint
+	IsGateway       bool // True if we are the tunnel gateway
 	CreatedAt       time.Time
 	ExpiresAt       time.Time
 }

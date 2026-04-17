@@ -37,8 +37,8 @@ import (
 
 // RelayCircuit represents a relay circuit between two peers through this node.
 type RelayCircuit struct {
-	PeerA     [32]byte  // router hash of peer A
-	PeerB     [32]byte  // router hash of peer B
+	PeerA     [32]byte // router hash of peer A
+	PeerB     [32]byte // router hash of peer B
 	CreatedAt time.Time
 	LastUsed  time.Time
 	BytesAtoB uint64

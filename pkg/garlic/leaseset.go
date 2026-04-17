@@ -12,19 +12,19 @@ import (
 // LeaseSet represents a set of tunnel entry points for a destination
 // This allows others to reach a destination through its inbound tunnels
 type LeaseSet struct {
-	Destination     [32]byte           // Destination hash (SHA-256 of signing key)
-	EncryptionKey   [32]byte           // Public encryption key for garlic messages
-	SigningKey      ed25519.PublicKey   // Public signing key for verification
-	Leases          []*Lease           // Active tunnel entry points
-	Expiration      time.Time
-	Signature       []byte             // Ed25519 signature over the lease set
+	Destination   [32]byte          // Destination hash (SHA-256 of signing key)
+	EncryptionKey [32]byte          // Public encryption key for garlic messages
+	SigningKey    ed25519.PublicKey // Public signing key for verification
+	Leases        []*Lease          // Active tunnel entry points
+	Expiration    time.Time
+	Signature     []byte // Ed25519 signature over the lease set
 }
 
 // Lease represents a single tunnel entry point
 type Lease struct {
-	Gateway     [32]byte        // Router hash of tunnel gateway
-	TunnelID    tunnel.TunnelID // Tunnel ID at the gateway
-	Expiration  time.Time       // When this lease expires
+	Gateway    [32]byte        // Router hash of tunnel gateway
+	TunnelID   tunnel.TunnelID // Tunnel ID at the gateway
+	Expiration time.Time       // When this lease expires
 }
 
 // NewLeaseSet creates a new lease set
