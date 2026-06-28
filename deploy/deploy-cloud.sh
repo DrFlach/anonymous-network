@@ -192,16 +192,24 @@ do_deploy() {
 {
     \"listen_address\": \"0.0.0.0\",
     \"listen_port\": $PORT,
-    \"max_connections\": 50,
+    \"max_connections\": 200,
     \"is_floodfill\": true,
+    \"bridge_mode\": true,
     \"outproxy_enabled\": true,
     \"socks5_enabled\": false,
     \"seed_routers\": [],
+    \"bootstrap_seed_urls\": [],
+    \"min_seed_routers\": 0,
+    \"router_info_file\": \"$REMOTE_DIR/router.dat\",
     \"identity_file\": \"$REMOTE_DIR/identity.json\",
     \"inbound_tunnels\": 3,
     \"outbound_tunnels\": 3,
     \"tunnel_length\": 3,
-    \"tunnel_lifetime\": 600
+    \"tunnel_lifetime_seconds\": 600,
+    \"message_queue_size\": 1000,
+    \"peer_exchange_interval_sec\": 60,
+    \"max_peer_exchange_size\": 100,
+    \"log_level\": \"INFO\"
 }
 CFGEOF"
 
@@ -211,19 +219,39 @@ CFGEOF"
         # Try ufw (Ubuntu/Debian)
         if command -v ufw &>/dev/null; then
             sudo ufw allow $PORT/tcp 2>/dev/null
+            sudo ufw allow $PORT/udp 2>/dev/null
         fi
         # Try firewall-cmd (CentOS/Fedora)
         if command -v firewall-cmd &>/dev/null; then
             sudo firewall-cmd --add-port=$PORT/tcp --permanent 2>/dev/null
+            sudo firewall-cmd --add-port=$PORT/udp --permanent 2>/dev/null
             sudo firewall-cmd --reload 2>/dev/null
         fi
         # iptables fallback
         if command -v iptables &>/dev/null; then
             sudo iptables -C INPUT -p tcp --dport $PORT -j ACCEPT 2>/dev/null || \
             sudo iptables -I INPUT -p tcp --dport $PORT -j ACCEPT 2>/dev/null
+            sudo iptables -C INPUT -p udp --dport $PORT -j ACCEPT 2>/dev/null || \
+            sudo iptables -I INPUT -p udp --dport $PORT -j ACCEPT 2>/dev/null
         fi
         true
     "
+
+    if $USE_GCLOUD; then
+        info "Ensuring Google Cloud firewall allows TCP/UDP $PORT..."
+        NETWORK=$(gcloud compute instances describe "$GCE_VM" $GCE_ZONE_FLAG \
+            --format='get(networkInterfaces[0].network)' 2>/dev/null | awk -F/ '{print $NF}')
+        if [ -z "$NETWORK" ]; then
+            NETWORK="default"
+        fi
+        gcloud compute firewall-rules describe allow-anon-router-$PORT >/dev/null 2>&1 || \
+        gcloud compute firewall-rules create allow-anon-router-$PORT \
+            --network="$NETWORK" \
+            --allow=tcp:$PORT,udp:$PORT \
+            --direction=INGRESS \
+            --description="Allow anonymous-network router TCP and LAN discovery UDP" >/dev/null 2>&1 || \
+        warn "Could not create Google Cloud firewall rule automatically. Create one manually for tcp:$PORT,udp:$PORT."
+    fi
 
     # Create systemd service
     info "Installing systemd service..."
