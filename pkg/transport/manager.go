@@ -3,6 +3,7 @@ package transport
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"strings"
@@ -83,6 +84,9 @@ type Manager struct {
 	relayMgr      *RelayManager
 	relayRoutes   map[[32]byte][32]byte // destHash → relayPeerHash
 	relayRoutesMu sync.RWMutex
+
+	// LAN discovery
+	lanDiscoveryConn *net.UDPConn
 }
 
 // IncomingMessage represents a message received from a peer
@@ -303,6 +307,10 @@ func (m *Manager) Start(listenAddr string) error {
 	// Start cross-network RouterInfo exchange loop
 	m.wg.Add(1)
 	go m.routerInfoExchangeLoop()
+
+	// Start local-network peer discovery. This gives two laptops on the same
+	// Wi-Fi/LAN an initial rendezvous even when public bootstrap is unavailable.
+	m.startLANDiscovery()
 
 	return nil
 }
@@ -1303,6 +1311,198 @@ func (m *Manager) peerExchangeLoop() {
 	}
 }
 
+// ─── LAN discovery ───────────────────────────────────────────────────────────
+
+const lanDiscoveryMagic = "anonymous-network-lan-v1"
+
+type lanDiscoveryPacket struct {
+	Magic      string   `json:"magic"`
+	RouterHash string   `json:"router_hash"`
+	Addrs      []string `json:"addrs"`
+}
+
+// startLANDiscovery starts UDP broadcast discovery on the same port as the TCP
+// transport. It is intentionally best-effort: bootstrap/seed discovery remains
+// the cross-network path, while LAN discovery only creates the first local link.
+func (m *Manager) startLANDiscovery() {
+	if m.listenPort == 0 {
+		return
+	}
+
+	addr := &net.UDPAddr{IP: net.IPv4zero, Port: m.listenPort}
+	conn, err := net.ListenUDP("udp4", addr)
+	if err != nil {
+		m.logger.Info("LAN discovery disabled: UDP listen on port %d failed: %v", m.listenPort, err)
+		return
+	}
+
+	m.lanDiscoveryConn = conn
+	m.wg.Add(2)
+	go m.lanDiscoveryReceiveLoop(conn)
+	go m.lanDiscoveryAnnounceLoop(conn)
+	m.logger.Info("LAN discovery enabled on UDP port %d", m.listenPort)
+}
+
+func (m *Manager) lanDiscoveryAnnounceLoop(conn *net.UDPConn) {
+	defer m.wg.Done()
+
+	m.broadcastLANAnnouncement(conn)
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stopChan:
+			return
+		case <-ticker.C:
+			m.broadcastLANAnnouncement(conn)
+		}
+	}
+}
+
+func (m *Manager) broadcastLANAnnouncement(conn *net.UDPConn) {
+	addrs := m.getLocalListenAddrs()
+	if len(addrs) == 0 {
+		return
+	}
+
+	pkt := lanDiscoveryPacket{
+		Magic:      lanDiscoveryMagic,
+		RouterHash: base64.RawStdEncoding.EncodeToString(m.identity.RouterHash[:]),
+		Addrs:      addrs,
+	}
+	payload, err := json.Marshal(pkt)
+	if err != nil {
+		return
+	}
+
+	targets := m.lanBroadcastTargets()
+	for _, target := range targets {
+		if _, err := conn.WriteToUDP(payload, target); err != nil {
+			m.logger.Debug("LAN discovery announce to %s failed: %v", target.String(), err)
+		}
+	}
+}
+
+func (m *Manager) lanDiscoveryReceiveLoop(conn *net.UDPConn) {
+	defer m.wg.Done()
+
+	buf := make([]byte, 8192)
+	for {
+		_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+		n, src, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			select {
+			case <-m.stopChan:
+				return
+			default:
+			}
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
+			m.logger.Debug("LAN discovery read failed: %v", err)
+			continue
+		}
+
+		var pkt lanDiscoveryPacket
+		if err := json.Unmarshal(buf[:n], &pkt); err != nil {
+			continue
+		}
+		m.handleLANDiscoveryPacket(pkt, src)
+	}
+}
+
+func (m *Manager) handleLANDiscoveryPacket(pkt lanDiscoveryPacket, src *net.UDPAddr) {
+	if pkt.Magic != lanDiscoveryMagic || pkt.RouterHash == "" {
+		return
+	}
+	if pkt.RouterHash == base64.RawStdEncoding.EncodeToString(m.identity.RouterHash[:]) {
+		return
+	}
+
+	for _, addr := range pkt.Addrs {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		host, port, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
+		}
+		ip := net.ParseIP(host)
+		if !isUsableIP(ip) || !ip.IsPrivate() {
+			continue
+		}
+		if !m.isReachableAddr(addr) {
+			continue
+		}
+		if m.trackKnownNode(addr) {
+			m.logger.Info("LAN discovery: found peer %s from %s", addr, src.String())
+		}
+		_ = port
+		m.tryConnectToPeer(addr)
+	}
+}
+
+func (m *Manager) lanBroadcastTargets() []*net.UDPAddr {
+	seen := make(map[string]bool)
+	add := func(ip net.IP) {
+		if ip == nil {
+			return
+		}
+		target := &net.UDPAddr{IP: ip, Port: m.listenPort}
+		seen[target.String()] = true
+	}
+
+	add(net.IPv4bcast)
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return mapUDPTargets(seen)
+	}
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, a := range addrs {
+			ipnet, ok := a.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			ip := ipnet.IP.To4()
+			mask := ipnet.Mask
+			if ip == nil || len(mask) != net.IPv4len {
+				continue
+			}
+			bcast := net.IPv4(
+				ip[0]|^mask[0],
+				ip[1]|^mask[1],
+				ip[2]|^mask[2],
+				ip[3]|^mask[3],
+			)
+			add(bcast)
+		}
+	}
+
+	return mapUDPTargets(seen)
+}
+
+func mapUDPTargets(seen map[string]bool) []*net.UDPAddr {
+	targets := make([]*net.UDPAddr, 0, len(seen))
+	for raw := range seen {
+		addr, err := net.ResolveUDPAddr("udp4", raw)
+		if err == nil {
+			targets = append(targets, addr)
+		}
+	}
+	return targets
+}
+
 // ─── External IP discovery (STUN-like) ────────────────────────────────────────
 
 // sendYourIP tells a connecting peer what their external IP address is.
@@ -1563,6 +1763,9 @@ func (m *Manager) Stop() {
 
 	if m.listener != nil {
 		m.listener.Close()
+	}
+	if m.lanDiscoveryConn != nil {
+		m.lanDiscoveryConn.Close()
 	}
 
 	// Close all peer connections

@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     ports:
       - "7656:7656/tcp"
+      - "7656:7656/udp"
       - "4447:4447/tcp"
     volumes:
       - ./data:/data

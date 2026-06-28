@@ -16,8 +16,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /data
 COPY --from=builder /out/anon-router /usr/local/bin/anon-router
 
-# P2P + SOCKS5
-EXPOSE 7656/tcp 4447/tcp
+# P2P + LAN discovery + SOCKS5
+EXPOSE 7656/tcp 7656/udp 4447/tcp
 
 # Persist identity/config between restarts
 VOLUME ["/data"]

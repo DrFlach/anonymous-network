@@ -8,9 +8,10 @@
     "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"
   ],
   "min_seed_routers": 3,
+  "router_info_file": "router.dat",
   "identity_file": "identity.json",
   "max_connections": 200,
-  "is_floodfill": true,
+  "is_floodfill": false,
   "tunnel_length": 3,
   "tunnel_lifetime_seconds": 600,
   "inbound_tunnels": 3,
@@ -18,11 +19,14 @@
   "socks5_enabled": true,
   "socks5_address": "127.0.0.1:4447",
   "outproxy_enabled": true,
-  "strict_dns_only": true,
   "dns_servers": [
     "https://1.1.1.1/dns-query",
     "https://dns.google/resolve",
     "https://mozilla.cloudflare-dns.com/dns-query"
   ],
+  "strict_dns_only": true,
+  "message_queue_size": 1000,
+  "peer_exchange_interval_sec": 300,
+  "max_peer_exchange_size": 50,
   "log_level": "INFO"
 }
