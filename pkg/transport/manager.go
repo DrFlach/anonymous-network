@@ -980,6 +980,8 @@ func (m *Manager) announceSelf(peer *PeerConnection) {
 	}
 	if err := peer.Conn.SendFrame(data); err != nil {
 		m.logger.Debug("Failed to announce self to %s: %v", peer.Address, err)
+	} else {
+		m.logger.Info("Announced our addresses to %s: %v", peer.Address, validAddrs)
 	}
 }
 
@@ -1083,6 +1085,7 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
 	}
 	parts := strings.Split(string(payload), ",")
 	hasNewAddrs := false
+	m.logger.Debug("Received peer list from %x with %d entries", from[:8], len(parts))
 
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
@@ -1149,15 +1152,18 @@ func (m *Manager) HandlePeerList(from [32]byte, payload []byte) {
 func (m *Manager) isReachableAddr(addr string) bool {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
+		m.logger.Debug("Connection: invalid address format: %s", addr)
 		return false
 	}
 	ip := net.ParseIP(host)
 	if !isUsableIP(ip) {
+		m.logger.Debug("Connection: unusable IP %s", addr)
 		return false
 	}
 	// Also filter CGNAT range (100.64.0.0/10) — used by Tailscale, carrier-grade NAT, etc.
 	if ip4 := ip.To4(); ip4 != nil {
 		if ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127 {
+			m.logger.Debug("Connection: skipping CGNAT IP %s", addr)
 			return false
 		}
 	}
@@ -1180,6 +1186,7 @@ func (m *Manager) isReachableAddr(addr string) bool {
 			return true
 		}
 	}
+	m.logger.Debug("Connection: private IP %s not in our subnet (we're %v), skipping - need public IP or same LAN", addr, ourAddrs)
 	return false
 }
 
@@ -1187,7 +1194,7 @@ func (m *Manager) isReachableAddr(addr string) bool {
 func (m *Manager) tryConnectToPeer(addr string) {
 	// Skip unreachable addresses (foreign private IPs, loopback, etc)
 	if !m.isReachableAddr(addr) {
-		m.logger.Debug("Peer exchange: skipping unreachable %s", addr)
+		m.logger.Info("Peer exchange: discovered %s, connecting... [SKIPPED - not reachable from here]", addr)
 		return
 	}
 
