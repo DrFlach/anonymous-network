@@ -33,6 +33,7 @@ jobs:
         host: ${{ secrets.VM_HOST }}
         username: ${{ secrets.VM_USERNAME }}
         key: ${{ secrets.VM_SSH_KEY }}
+        passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # Добавили пароль
         source: "anon-router"
         target: "/home/azureuser/"
 
@@ -43,8 +44,8 @@ jobs:
         host: ${{ secrets.VM_HOST }}
         username: ${{ secrets.VM_USERNAME }}
         key: ${{ secrets.VM_SSH_KEY }}
+        passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # Добавили пароль
         script: |
-          # Переносим с правами sudo (так как /opt/anon-router создана root-ом)
           sudo mv /home/azureuser/anon-router /opt/anon-router/anon-router
           sudo chmod +x /opt/anon-router/anon-router
           sudo systemctl restart anon-router
