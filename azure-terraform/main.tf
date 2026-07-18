@@ -38,7 +38,8 @@ resource "azurerm_public_ip" "anon_ip" {
   name                = "pip-anon-node"
   location            = azurerm_resource_group.anon_rg.location
   resource_group_name = azurerm_resource_group.anon_rg.name
-  allocation_method   = "Static" # Static IP is required for stable P2P connections
+  allocation_method   = "Static" 
+  sku                 = "Standard" 
 }
 
 # Network Security Group (Firewall rules)
@@ -90,7 +91,7 @@ resource "azurerm_network_security_group" "anon_nsg" {
 # Network Interface (NIC) for the VM
 resource "azurerm_network_interface" "anon_nic" {
   name                = "nic-anon"
-  location            = azurerm_network_interface.anon_nic.location # Fixed for consistency
+  location            = azurerm_resource_group.anon_rg.location # Fixed for consistency
   resource_group_name = azurerm_resource_group.anon_rg.name
 
   ip_configuration {
