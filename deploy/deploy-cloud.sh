@@ -209,6 +209,13 @@ do_deploy() {
     \"message_queue_size\": 1000,
     \"peer_exchange_interval_sec\": 60,
     \"max_peer_exchange_size\": 100,
+    \"dns_servers\": [
+        \"https://1.1.1.1/dns-query\",
+        \"https://dns.google/resolve\",
+        \"https://mozilla.cloudflare-dns.com/dns-query\"
+    ],
+    \"strict_dns_only\": true,
+    \"allow_direct_outproxy\": false,
     \"log_level\": \"INFO\"
 }
 CFGEOF"
