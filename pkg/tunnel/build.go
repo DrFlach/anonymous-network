@@ -29,7 +29,8 @@ type BuildRequestRecord struct {
 
 // BuildResponseRecord represents a response to a build request
 type BuildResponseRecord struct {
-	Reply byte // 0 = accept, 1 = reject, 2 = busy
+	ReceiveTunnelID TunnelID
+	Reply           byte // 0 = accept, 1 = reject, 2 = busy
 }
 
 const (
@@ -58,7 +59,7 @@ func SerializeBuildRequest(rec *BuildRequestRecord) []byte {
 
 // DeserializeBuildRequest parses a build request record
 func DeserializeBuildRequest(data []byte) (*BuildRequestRecord, error) {
-	if len(data) < 109 { // 4+32+4+32+32+1+4+4 = 113, but at minimum ~109
+	if len(data) < 113 { // 4+32+4+32+32+1+4+4
 		return nil, fmt.Errorf("build request too short: %d", len(data))
 	}
 
@@ -88,6 +89,26 @@ func DeserializeBuildRequest(data []byte) (*BuildRequestRecord, error) {
 	return rec, nil
 }
 
+// SerializeBuildResponse serializes a build response with the receive tunnel ID
+// so the tunnel pool can correlate replies with pending tunnel builds.
+func SerializeBuildResponse(rec *BuildResponseRecord) []byte {
+	buf := make([]byte, 5)
+	binary.BigEndian.PutUint32(buf[0:4], uint32(rec.ReceiveTunnelID))
+	buf[4] = rec.Reply
+	return buf
+}
+
+// DeserializeBuildResponse parses a build response record.
+func DeserializeBuildResponse(data []byte) (*BuildResponseRecord, error) {
+	if len(data) < 5 {
+		return nil, fmt.Errorf("build response too short: %d", len(data))
+	}
+	return &BuildResponseRecord{
+		ReceiveTunnelID: TunnelID(binary.BigEndian.Uint32(data[0:4])),
+		Reply:           data[4],
+	}, nil
+}
+
 // EncryptBuildRequestForHop encrypts a build request for a specific hop using their public key
 func EncryptBuildRequestForHop(request []byte, recipientPubKey [32]byte) ([]byte, error) {
 	// Generate ephemeral key pair for this request
@@ -95,6 +116,9 @@ func EncryptBuildRequestForHop(request []byte, recipientPubKey [32]byte) ([]byte
 	if _, err := io.ReadFull(rand.Reader, ephPriv[:]); err != nil {
 		return nil, fmt.Errorf("failed to generate ephemeral key: %w", err)
 	}
+	ephPriv[0] &= 248
+	ephPriv[31] &= 127
+	ephPriv[31] |= 64
 	curve25519.ScalarBaseMult(&ephPub, &ephPriv)
 
 	// Derive shared secret

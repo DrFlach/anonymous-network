@@ -33,10 +33,11 @@ type Config struct {
 	SOCKS5Password string `json:"socks5_password,omitempty"`
 
 	// Outproxy settings
-	OutproxyEnabled bool     `json:"outproxy_enabled"`
-	DNSServers      []string `json:"dns_servers"`
-	StrictDNSOnly   bool     `json:"strict_dns_only,omitempty"`
-	BlockedHosts    []string `json:"blocked_hosts,omitempty"`
+	OutproxyEnabled     bool     `json:"outproxy_enabled"`
+	AllowDirectOutproxy bool     `json:"allow_direct_outproxy,omitempty"`
+	DNSServers          []string `json:"dns_servers"`
+	StrictDNSOnly       bool     `json:"strict_dns_only,omitempty"`
+	BlockedHosts        []string `json:"blocked_hosts,omitempty"`
 
 	// Performance
 	MessageQueueSize int `json:"message_queue_size"`
@@ -75,20 +76,21 @@ func DefaultConfig() *Config {
 		BootstrapSeedURLs: []string{
 			"https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt",
 		},
-		MinSeedRouters:  3,
-		RouterInfoFile:  "router.dat",
-		IdentityFile:    "identity.json",
-		MaxConnections:  200,
-		IsFloodfill:     false,
-		TunnelLength:    3,
-		TunnelLifetime:  600, // 10 minutes
-		InboundTunnels:  3,
-		OutboundTunnels: 3,
-		SOCKS5Enabled:   true,
-		SOCKS5Address:   "127.0.0.1:4447",
-		SOCKS5Username:  "",
-		SOCKS5Password:  "",
-		OutproxyEnabled: true,
+		MinSeedRouters:      3,
+		RouterInfoFile:      "router.dat",
+		IdentityFile:        "identity.json",
+		MaxConnections:      200,
+		IsFloodfill:         false,
+		TunnelLength:        3,
+		TunnelLifetime:      600, // 10 minutes
+		InboundTunnels:      3,
+		OutboundTunnels:     3,
+		SOCKS5Enabled:       true,
+		SOCKS5Address:       "127.0.0.1:4447",
+		SOCKS5Username:      "",
+		SOCKS5Password:      "",
+		OutproxyEnabled:     true,
+		AllowDirectOutproxy: false,
 		DNSServers: []string{
 			"https://1.1.1.1/dns-query",
 			"https://dns.google/resolve",

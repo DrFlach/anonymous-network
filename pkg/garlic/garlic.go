@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"network/pkg/crypto"
+
+	"golang.org/x/crypto/curve25519"
 )
 
 // CloveDeliveryType defines how a garlic clove should be delivered
@@ -205,6 +207,10 @@ func (gm *GarlicMessage) Encrypt(recipientPubKey [32]byte) ([]byte, error) {
 	if _, err := io.ReadFull(rand.Reader, ephPriv[:]); err != nil {
 		return nil, err
 	}
+	ephPriv[0] &= 248
+	ephPriv[31] &= 127
+	ephPriv[31] |= 64
+	curve25519.ScalarBaseMult(&ephPub, &ephPriv)
 
 	// Use DeriveSharedSecret from crypto package
 	shared, err := crypto.DeriveSharedSecret(ephPriv, recipientPubKey)

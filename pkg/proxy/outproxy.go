@@ -22,6 +22,7 @@ type Outproxy struct {
 	activeConns  int64
 	blockedHosts map[string]bool // Simple blocklist
 	dnsResolver  *SecureDNSResolver
+	allowDirect  bool
 }
 
 // OutproxyConfig configures the outproxy
@@ -31,6 +32,7 @@ type OutproxyConfig struct {
 	BlockedHosts  []string
 	DNSServers    []string // DNS-over-HTTPS servers
 	StrictDNSOnly bool     // If true, disable system DNS fallback
+	AllowDirect   bool     // If true, local SOCKS may dial clearnet directly (not anonymous)
 }
 
 // DefaultOutproxyConfig returns sensible defaults
@@ -45,6 +47,7 @@ func DefaultOutproxyConfig() *OutproxyConfig {
 			"https://dns.quad9.net/dns-query", // Quad9
 		},
 		StrictDNSOnly: true,
+		AllowDirect:   false,
 	}
 }
 
@@ -69,6 +72,7 @@ func NewOutproxy(config *OutproxyConfig) *Outproxy {
 		},
 		blockedHosts: blocked,
 		dnsResolver:  resolver,
+		allowDirect:  config.AllowDirect,
 	}
 }
 
@@ -76,6 +80,15 @@ func NewOutproxy(config *OutproxyConfig) *Outproxy {
 func (o *Outproxy) Connect(targetAddr string, outTunnel *tunnel.Tunnel) (net.Conn, error) {
 	if !o.enabled {
 		return nil, fmt.Errorf("outproxy is disabled")
+	}
+	if !o.allowDirect {
+		if outTunnel == nil {
+			return nil, fmt.Errorf("direct outproxy is disabled and no outbound tunnel is available")
+		}
+		if len(outTunnel.Hops) == 0 {
+			return nil, fmt.Errorf("direct outproxy is disabled and zero-hop tunnels are not anonymous")
+		}
+		return nil, fmt.Errorf("remote exit over outbound tunnels is not implemented yet")
 	}
 
 	// Parse host and port
@@ -100,8 +113,8 @@ func (o *Outproxy) Connect(targetAddr string, outTunnel *tunnel.Tunnel) (net.Con
 	}
 	o.logger.Debug("Outproxy connecting to %s (resolved: %s)", targetAddr, resolvedAddr)
 
-	// If we have a tunnel, the data was already encrypted through the tunnel
-	// The outproxy is the exit node that makes the actual connection
+	// Direct mode is only for an explicitly configured local exit/proxy.
+	// It does not provide anonymity for the local SOCKS client.
 	conn, err := o.dialer.Dial("tcp", resolvedAddr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to %s: %w", resolvedAddr, err)

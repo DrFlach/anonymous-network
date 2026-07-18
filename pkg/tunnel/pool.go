@@ -28,6 +28,13 @@ type Pool struct {
 	wg             sync.WaitGroup
 	onBuildTunnel  func(tunnel *Tunnel, requests [][]byte) error // Callback to send build requests
 	participants   *TunnelParticipantStore
+	pendingBuilds  map[TunnelID]*pendingTunnelBuild
+}
+
+type pendingTunnelBuild struct {
+	tunnel   *Tunnel
+	expected map[TunnelID]bool
+	accepted map[TunnelID]bool
 }
 
 // PoolConfig configures the tunnel pool
@@ -63,6 +70,7 @@ func NewPool(identity *crypto.RouterIdentity, netDB *netdb.Store, config *PoolCo
 		logger:         util.GetLogger(),
 		stopChan:       make(chan struct{}),
 		participants:   NewTunnelParticipantStore(),
+		pendingBuilds:  make(map[TunnelID]*pendingTunnelBuild),
 	}
 }
 
@@ -189,29 +197,77 @@ func (p *Pool) buildNewTunnel(direction Direction) error {
 		return fmt.Errorf("failed to build tunnel: %w", err)
 	}
 
+	pending := &pendingTunnelBuild{
+		tunnel:   tunnel,
+		expected: make(map[TunnelID]bool, len(tunnel.Hops)),
+		accepted: make(map[TunnelID]bool, len(tunnel.Hops)),
+	}
+	for _, hop := range tunnel.Hops {
+		pending.expected[hop.TunnelID] = true
+	}
+
+	p.mu.Lock()
+	p.pendingBuilds[tunnel.ID] = pending
+	p.mu.Unlock()
+
 	// Send build requests through the network
 	if p.onBuildTunnel != nil {
 		if err := p.onBuildTunnel(tunnel, buildRequests); err != nil {
+			p.mu.Lock()
+			delete(p.pendingBuilds, tunnel.ID)
+			p.mu.Unlock()
 			return fmt.Errorf("failed to send build requests: %w", err)
 		}
-	}
-
-	// Mark tunnel as ready (in production, would wait for responses)
-	tunnel.IsReady = true
-
-	// Add to pool
-	p.mu.Lock()
-	if direction == Inbound {
-		p.inbound = append(p.inbound, tunnel)
 	} else {
-		p.outbound = append(p.outbound, tunnel)
+		p.mu.Lock()
+		delete(p.pendingBuilds, tunnel.ID)
+		p.mu.Unlock()
+		return fmt.Errorf("no tunnel build callback configured")
 	}
-	p.mu.Unlock()
 
-	p.logger.Info("Built %s tunnel with %d hops (ID=%d)",
+	p.logger.Info("Sent %s tunnel build with %d hops (ID=%d), waiting for replies",
 		directionString(direction), len(tunnel.Hops), tunnel.ID)
 
 	return nil
+}
+
+// HandleBuildResponse records a tunnel build response and marks a tunnel ready
+// only after all participating hops accepted it.
+func (p *Pool) HandleBuildResponse(resp *BuildResponseRecord) {
+	if resp == nil {
+		return
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for id, pending := range p.pendingBuilds {
+		if !pending.expected[resp.ReceiveTunnelID] {
+			continue
+		}
+
+		if resp.Reply != BuildAccept {
+			delete(p.pendingBuilds, id)
+			p.logger.Warn("Tunnel build rejected: tunnel=%d hop=%d reply=%d", id, resp.ReceiveTunnelID, resp.Reply)
+			return
+		}
+
+		pending.accepted[resp.ReceiveTunnelID] = true
+		if len(pending.accepted) != len(pending.expected) {
+			return
+		}
+
+		delete(p.pendingBuilds, id)
+		pending.tunnel.IsReady = true
+		if pending.tunnel.Direction == Inbound {
+			p.inbound = append(p.inbound, pending.tunnel)
+		} else {
+			p.outbound = append(p.outbound, pending.tunnel)
+		}
+		p.logger.Info("Tunnel ready: %s with %d hops (ID=%d)",
+			directionString(pending.tunnel.Direction), len(pending.tunnel.Hops), pending.tunnel.ID)
+		return
+	}
 }
 
 // createZeroHopTunnel creates a local tunnel (no hops, for testing/bootstrap)

@@ -69,6 +69,7 @@ if [ ! -f config.json ]; then
   "socks5_enabled": true,
   "socks5_address": "127.0.0.1:$SOCKS_PORT",
   "outproxy_enabled": true,
+  "allow_direct_outproxy": false,
     "strict_dns_only": true,
   "dns_servers": [
     "https://1.1.1.1/dns-query",

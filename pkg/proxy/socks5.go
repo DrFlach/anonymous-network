@@ -175,16 +175,16 @@ func (s *SOCKS5Server) handleConnection(conn net.Conn) {
 		return
 	}
 
-	// Log connection with encryption status
+	// Log requested connection. The outproxy decides whether direct local exit is allowed.
 	host, port, _ := net.SplitHostPort(targetAddr)
 	isTLS := port == "443"
 	protocol := "HTTP"
 	if isTLS {
 		protocol = "HTTPS/TLS"
 	}
-	s.logger.Info("[PROXY] %s → %s [%s] [DNS:DoH] [Tunnel:active]", conn.RemoteAddr(), targetAddr, protocol)
+	s.logger.Info("[PROXY] %s -> %s [%s] [DNS:DoH]", conn.RemoteAddr(), targetAddr, protocol)
 	if !isTLS {
-		s.logger.Warn("[PROXY] ⚠ %s uses plain HTTP — data NOT encrypted end-to-end (only DNS is protected via DoH)", host)
+		s.logger.Warn("[PROXY] %s uses plain HTTP; data is not encrypted end-to-end by the destination protocol", host)
 	}
 
 	// 3. Route through anonymous network
@@ -346,7 +346,7 @@ func (s *SOCKS5Server) routeConnection(clientConn net.Conn, targetAddr string) e
 	// Try to get an outbound tunnel for routing
 	outTunnel, err := s.tunnelPool.GetOutboundTunnel()
 	if err != nil {
-		s.logger.Debug("No tunnel available, using outproxy directly: %v", err)
+		s.logger.Debug("No outbound tunnel available: %v", err)
 	}
 
 	// Connect through outproxy (which handles the actual internet connection)

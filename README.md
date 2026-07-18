@@ -1,12 +1,14 @@
 # Anonymous P2P Network
 
-A fully functional anonymous peer-to-peer network with onion routing, garlic encryption, automatic peer discovery, and a SOCKS5 proxy for private internet browsing. Written in Go.
+An experimental anonymous peer-to-peer network prototype with encrypted transport, peer discovery, tunnel-building scaffolding, garlic encryption primitives, and a SOCKS5 proxy entry point. Written in Go.
+
+> Status: this is alpha software. The P2P transport, NetDB, relay, and tunnel-build components are under active development. Remote exit routing for SOCKS5 traffic is not implemented yet, so direct clearnet outproxy mode is disabled by default to avoid accidental privacy leaks.
 
 ## Features
 
-- **Onion-routed tunnels** — multi-hop encrypted tunnels (like Tor/I2P)
+- **Onion-routed tunnels** — multi-hop encrypted tunnel scaffolding with build requests/replies
 - **Garlic encryption** — bundle multiple messages into one encrypted packet
-- **SOCKS5 proxy** — plug into any browser for anonymous browsing
+- **SOCKS5 proxy** — local proxy entry point; remote exit routing is not implemented yet
 - **DNS-over-HTTPS** — no DNS leaks (Cloudflare, Google, Mozilla)
 - **Automatic peer discovery** — connect to a seed node, find the rest automatically
 - **UPnP auto port forwarding** — opens your router port automatically so others can connect to you
@@ -14,7 +16,7 @@ A fully functional anonymous peer-to-peer network with onion routing, garlic enc
 - **Floodfill DHT** — distributed router database, no central server required
 - **Bootstrap seed lists** — fetch extra seeds from URL to avoid single-point bootstrap
 - **Strict DoH mode** — optional DNS policy without system-DNS fallback
-- **Zero config** — just build and run, everything works out of the box
+- **Safe defaults** — direct clearnet outproxy is opt-in via `allow_direct_outproxy`
 
 ## Quick Start — Join the Network
 
@@ -108,6 +110,8 @@ That's it. The router will:
 - Start a SOCKS5 proxy on `127.0.0.1:4447`
 - Build encrypted tunnels through the network
 
+By default, SOCKS5 requests will not be sent directly to the clearnet. Until remote exit routing is implemented, set `"allow_direct_outproxy": true` only if you deliberately want a local, non-anonymous direct proxy for testing.
+
 ### 3. Configure your browser
 
 #### Firefox (recommended)
@@ -164,7 +168,7 @@ SOCKS5 proxy ready on 127.0.0.1:4447
                      |  +--------------------------------------+    |
                      |                                              |
                      |  +--------------------------------------+    |
-                     |  |  Outproxy (Exit Node -> Internet)    |    |
+                     |  |  Outproxy (direct mode is opt-in)    |    |
                      |  |  + DNS-over-HTTPS (DoH)              |    |
                      |  +--------------------------------------+    |
                      +----------------------------------------------+
@@ -199,8 +203,8 @@ SOCKS5 proxy ready on 127.0.0.1:4447
 - **Lease Sets** — publishing tunnel entry points for destinations
 
 ### Proxy (`pkg/proxy/`)
-- **SOCKS5 server** — browser connection through the anonymous network
-- **Outproxy** — exit node for accessing the regular internet
+- **SOCKS5 server** — browser-facing proxy entry point
+- **Outproxy** — local direct clearnet mode for testing only when `allow_direct_outproxy` is enabled
 - **DNS-over-HTTPS** — secure DNS resolution (Cloudflare, Google, Mozilla)
 
 ### NetDB (`pkg/netdb/`)

@@ -157,6 +157,7 @@ func main() {
 		BlockedHosts:  config.BlockedHosts,
 		DNSServers:    config.DNSServers,
 		StrictDNSOnly: config.StrictDNSOnly,
+		AllowDirect:   config.AllowDirectOutproxy,
 	}
 	outproxy := proxy.NewOutproxy(outproxyConfig)
 
@@ -170,6 +171,25 @@ func main() {
 	// Set up floodfill send function
 	floodfillMgr.SetSendFunc(func(routerHash [32]byte, data []byte) error {
 		return transportMgr.SendTo(routerHash, data)
+	})
+
+	// Set up tunnel build delivery. Each hop receives its encrypted build
+	// request directly; the pool marks the tunnel ready only after replies.
+	tunnelPool.SetBuildCallback(func(t *tunnel.Tunnel, requests [][]byte) error {
+		if len(t.Hops) != len(requests) {
+			return fmt.Errorf("tunnel build request count mismatch")
+		}
+		for i, req := range requests {
+			msg := router.NewMessage(router.MsgTypeTunnelBuild, req)
+			data, err := msg.Serialize()
+			if err != nil {
+				return err
+			}
+			if err := transportMgr.SendTo(t.Hops[i].RouterHash, data); err != nil {
+				return fmt.Errorf("send build request to hop %d (%x): %w", i, t.Hops[i].RouterHash[:8], err)
+			}
+		}
+		return nil
 	})
 
 	// Set up external IP change callback: re-publish RouterInfo when our public IP is discovered.
@@ -229,7 +249,7 @@ func main() {
 	}
 
 	// Start message handler
-	go handleMessages(transportMgr, netDB, floodfillMgr, tunnelPool, logger)
+	go handleMessages(identity, transportMgr, netDB, floodfillMgr, tunnelPool, logger)
 
 	// Publish our RouterInfo
 	publishRouterInfo(identity, fullListenAddr, netDB, floodfillMgr, config, logger)
@@ -451,7 +471,7 @@ func parseAddr(addr string) (string, int) {
 	return host, port
 }
 
-func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfillMgr *netdb.FloodfillManager, tunnelPool *tunnel.Pool, logger *util.Logger) {
+func handleMessages(identity *crypto.RouterIdentity, transportMgr *transport.Manager, netDB *netdb.Store, floodfillMgr *netdb.FloodfillManager, tunnelPool *tunnel.Pool, logger *util.Logger) {
 	msgChan := transportMgr.GetIncomingMessages()
 	participants := tunnelPool.GetParticipantStore()
 
@@ -495,7 +515,10 @@ func handleMessages(transportMgr *transport.Manager, netDB *netdb.Store, floodfi
 			transportMgr.SendTo(msg.From, data)
 
 		case router.MsgTypeTunnelBuild:
-			handleTunnelBuild(transportMgr, msg.From, parsedMsg, participants, logger)
+			handleTunnelBuild(identity, transportMgr, msg.From, parsedMsg, participants, logger)
+
+		case router.MsgTypeTunnelBuildReply:
+			handleTunnelBuildReply(tunnelPool, parsedMsg, logger)
 
 		case router.MsgTypeTunnelData:
 			handleTunnelData(transportMgr, parsedMsg, participants, logger)
@@ -561,10 +584,16 @@ func handlePing(transportMgr *transport.Manager, from [32]byte, msg *router.Mess
 	}
 }
 
-func handleTunnelBuild(transportMgr *transport.Manager, from [32]byte, msg *router.Message, participants *tunnel.TunnelParticipantStore, logger *util.Logger) {
+func handleTunnelBuild(identity *crypto.RouterIdentity, transportMgr *transport.Manager, from [32]byte, msg *router.Message, participants *tunnel.TunnelParticipantStore, logger *util.Logger) {
 	logger.Debug("Received tunnel build request from %x", from[:8])
 
-	req, err := tunnel.DeserializeBuildRequest(msg.Payload)
+	plaintext, err := tunnel.DecryptBuildRequest(msg.Payload, identity.EncryptionPrivateKey)
+	if err != nil {
+		logger.Error("Failed to decrypt tunnel build request: %v", err)
+		return
+	}
+
+	req, err := tunnel.DeserializeBuildRequest(plaintext)
 	if err != nil {
 		logger.Error("Failed to parse tunnel build request: %v", err)
 		return
@@ -586,9 +615,22 @@ func handleTunnelBuild(transportMgr *transport.Manager, from [32]byte, msg *rout
 	logger.Debug("Accepted tunnel participation: recv=%d endpoint=%v", req.ReceiveTunnelID, req.IsEndpoint)
 
 	// Send build reply (accept)
-	reply := router.NewMessage(router.MsgTypeTunnelBuildReply, []byte{tunnel.BuildAccept})
+	resp := tunnel.SerializeBuildResponse(&tunnel.BuildResponseRecord{
+		ReceiveTunnelID: req.ReceiveTunnelID,
+		Reply:           tunnel.BuildAccept,
+	})
+	reply := router.NewMessage(router.MsgTypeTunnelBuildReply, resp)
 	data, _ := reply.Serialize()
 	transportMgr.SendTo(from, data)
+}
+
+func handleTunnelBuildReply(tunnelPool *tunnel.Pool, msg *router.Message, logger *util.Logger) {
+	resp, err := tunnel.DeserializeBuildResponse(msg.Payload)
+	if err != nil {
+		logger.Debug("Failed to parse tunnel build reply: %v", err)
+		return
+	}
+	tunnelPool.HandleBuildResponse(resp)
 }
 
 func handleTunnelData(transportMgr *transport.Manager, msg *router.Message, participants *tunnel.TunnelParticipantStore, logger *util.Logger) {

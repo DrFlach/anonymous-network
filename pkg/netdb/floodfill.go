@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 
@@ -13,6 +14,16 @@ import (
 // MaxFloodTTL is the maximum number of hops a flooded RouterInfo can travel.
 // This prevents infinite propagation across large networks.
 const MaxFloodTTL = 4
+
+const (
+	maxRouterInfoDataLen = 64 * 1024
+	maxRouterAddrs       = 32
+	maxRouterHostLen     = 255
+	maxRouterCaps        = 64
+	maxRouterCapLen      = 64
+	maxRouterSignature   = 256
+	maxRouterInfoBatch   = 500
+)
 
 // FloodfillManager handles the distributed hash table (DHT) for RouterInfo propagation
 type FloodfillManager struct {
@@ -230,14 +241,18 @@ func DeserializeRouterInfo(data []byte) (*RouterInfo, error) {
 
 	// Read data length
 	var dataLen uint16
-	binary.Read(buf, binary.BigEndian, &dataLen)
+	if err := binary.Read(buf, binary.BigEndian, &dataLen); err != nil {
+		return nil, err
+	}
 
-	if int(dataLen) > buf.Len() {
+	if dataLen == 0 || int(dataLen) > maxRouterInfoDataLen || int(dataLen) > buf.Len() {
 		return nil, fmt.Errorf("RouterInfo data length exceeds available data")
 	}
 
 	riData := make([]byte, dataLen)
-	buf.Read(riData)
+	if _, err := io.ReadFull(buf, riData); err != nil {
+		return nil, fmt.Errorf("RouterInfo data truncated: %w", err)
+	}
 
 	// Parse the RouterInfo fields from riData
 	ri, err := parseRouterInfoData(riData)
@@ -247,11 +262,18 @@ func DeserializeRouterInfo(data []byte) (*RouterInfo, error) {
 
 	// Read signature
 	var sigLen uint16
-	binary.Read(buf, binary.BigEndian, &sigLen)
+	if err := binary.Read(buf, binary.BigEndian, &sigLen); err != nil {
+		return nil, err
+	}
 
 	if sigLen > 0 {
+		if int(sigLen) > maxRouterSignature || int(sigLen) > buf.Len() {
+			return nil, fmt.Errorf("RouterInfo signature length invalid")
+		}
 		ri.Signature = make([]byte, sigLen)
-		buf.Read(ri.Signature)
+		if _, err := io.ReadFull(buf, ri.Signature); err != nil {
+			return nil, fmt.Errorf("RouterInfo signature truncated: %w", err)
+		}
 	}
 
 	return ri, nil
@@ -270,30 +292,50 @@ func parseRouterInfoData(data []byte) (*RouterInfo, error) {
 	buf := bytes.NewReader(data)
 
 	// Read router hash
-	buf.Read(ri.RouterHash[:])
+	if _, err := io.ReadFull(buf, ri.RouterHash[:]); err != nil {
+		return nil, err
+	}
 
 	// Read signing public key (32 bytes for Ed25519)
 	sigKey := make([]byte, 32)
-	buf.Read(sigKey)
+	if _, err := io.ReadFull(buf, sigKey); err != nil {
+		return nil, err
+	}
 	ri.SigningPublicKey = sigKey
 
 	// Read encryption key
-	buf.Read(ri.EncryptionKey[:])
+	if _, err := io.ReadFull(buf, ri.EncryptionKey[:]); err != nil {
+		return nil, err
+	}
 
 	// Read number of addresses
 	var numAddrs uint16
-	binary.Read(buf, binary.BigEndian, &numAddrs)
+	if err := binary.Read(buf, binary.BigEndian, &numAddrs); err != nil {
+		return nil, err
+	}
+	if numAddrs > maxRouterAddrs {
+		return nil, fmt.Errorf("RouterInfo has too many addresses: %d", numAddrs)
+	}
 
 	ri.Addresses = make([]RouterAddress, numAddrs)
 	for i := 0; i < int(numAddrs); i++ {
 		var hostLen uint16
-		binary.Read(buf, binary.BigEndian, &hostLen)
+		if err := binary.Read(buf, binary.BigEndian, &hostLen); err != nil {
+			return nil, err
+		}
+		if hostLen == 0 || hostLen > maxRouterHostLen || int(hostLen) > buf.Len() {
+			return nil, fmt.Errorf("RouterInfo host length invalid")
+		}
 
 		hostBytes := make([]byte, hostLen)
-		buf.Read(hostBytes)
+		if _, err := io.ReadFull(buf, hostBytes); err != nil {
+			return nil, fmt.Errorf("RouterInfo host truncated: %w", err)
+		}
 
 		var port uint16
-		binary.Read(buf, binary.BigEndian, &port)
+		if err := binary.Read(buf, binary.BigEndian, &port); err != nil {
+			return nil, err
+		}
 
 		ri.Addresses[i] = RouterAddress{
 			Host: string(hostBytes),
@@ -303,22 +345,38 @@ func parseRouterInfoData(data []byte) (*RouterInfo, error) {
 
 	// Read timestamp
 	var timestamp int64
-	binary.Read(buf, binary.BigEndian, &timestamp)
+	if err := binary.Read(buf, binary.BigEndian, &timestamp); err != nil {
+		return nil, err
+	}
 	ri.Timestamp = time.Unix(timestamp, 0)
 
 	// Read capabilities
 	var numCaps uint16
-	binary.Read(buf, binary.BigEndian, &numCaps)
+	if err := binary.Read(buf, binary.BigEndian, &numCaps); err != nil {
+		return nil, err
+	}
+	if numCaps > maxRouterCaps {
+		return nil, fmt.Errorf("RouterInfo has too many capabilities: %d", numCaps)
+	}
 
 	for i := 0; i < int(numCaps); i++ {
 		var capLen uint16
-		binary.Read(buf, binary.BigEndian, &capLen)
+		if err := binary.Read(buf, binary.BigEndian, &capLen); err != nil {
+			return nil, err
+		}
+		if capLen == 0 || capLen > maxRouterCapLen || int(capLen) > buf.Len() {
+			return nil, fmt.Errorf("RouterInfo capability length invalid")
+		}
 
 		capBytes := make([]byte, capLen)
-		buf.Read(capBytes)
+		if _, err := io.ReadFull(buf, capBytes); err != nil {
+			return nil, fmt.Errorf("RouterInfo capability truncated: %w", err)
+		}
 
 		var enabled byte
-		binary.Read(buf, binary.BigEndian, &enabled)
+		if err := binary.Read(buf, binary.BigEndian, &enabled); err != nil {
+			return nil, err
+		}
 
 		ri.Capabilities[string(capBytes)] = enabled == 1
 	}
@@ -348,8 +406,8 @@ func DeserializeRouterInfoBatch(data []byte) ([]*RouterInfo, error) {
 	var count uint16
 	binary.Read(buf, binary.BigEndian, &count)
 
-	if count > 500 {
-		count = 500 // safety cap
+	if count > maxRouterInfoBatch {
+		count = maxRouterInfoBatch // safety cap
 	}
 
 	result := make([]*RouterInfo, 0, count)
@@ -358,8 +416,11 @@ func DeserializeRouterInfoBatch(data []byte) ([]*RouterInfo, error) {
 		if err := binary.Read(buf, binary.BigEndian, &riLen); err != nil {
 			break
 		}
+		if riLen == 0 || int(riLen) > maxRouterInfoDataLen || int(riLen) > buf.Len() {
+			return result, fmt.Errorf("RouterInfo batch entry length invalid")
+		}
 		riData := make([]byte, riLen)
-		if _, err := buf.Read(riData); err != nil {
+		if _, err := io.ReadFull(buf, riData); err != nil {
 			break
 		}
 		ri, err := DeserializeRouterInfo(riData)
