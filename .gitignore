@@ -49,3 +49,5 @@ override.tf.json
 
 # Core dumps (Memory snapshots)
 core.*
+
+seeds.txt
