@@ -175,6 +175,7 @@ func (m *Manager) addSeedAddr(addr string) {
 		}
 	}
 	m.seedAddrs = append(m.seedAddrs, addr)
+	m.logger.Info("✓ Connected to cloud network via seed: %s", addr)
 }
 
 // shouldUseNewDuplicate decides whether newcomer should replace existing duplicate connection.

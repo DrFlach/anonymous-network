@@ -234,14 +234,17 @@ func main() {
 	if len(cleanSeeds) == 0 {
 		logger.Warn("No seed routers configured. Use -join <addr> or set seed_routers/bootstrap_seed_urls in config.json")
 	} else {
-		logger.Info("Using %d seed routers", len(cleanSeeds))
+		logger.Info("Using %d seed routers for cloud network", len(cleanSeeds))
+		for _, seed := range cleanSeeds {
+			logger.Info("  ├─ Cloud seed: %s", seed)
+		}
 	}
 
 	// Register seeds for auto-reconnection
 	transportMgr.SetSeeds(cleanSeeds)
 
 	for _, seed := range cleanSeeds {
-		logger.Info("Connecting to seed router: %s", seed)
+		logger.Info("Connecting to cloud seed router: %s", seed)
 		if err := transportMgr.ConnectTo(seed); err != nil {
 			logger.Error("Failed to connect to seed %s: %v", seed, err)
 			logger.Info("Will auto-retry in background every 15 seconds")
@@ -351,11 +354,13 @@ func loadOrCreateConfig(path string) (*util.Config, error) {
 
 func applyConfigDefaults(config *util.Config) {
 	def := util.DefaultConfig()
+	logger := util.GetLogger()
 
 	// Don't apply seed defaults to bridge/floodfill nodes (they don't need bootstrap)
 	if !config.BridgeMode {
 		if len(config.SeedRouters) == 0 {
 			config.SeedRouters = append([]string{}, def.SeedRouters...)
+			logger.Info("Using default cloud seed routers: %v", config.SeedRouters)
 		}
 		if len(config.BootstrapSeedURLs) == 0 {
 			config.BootstrapSeedURLs = append([]string{}, def.BootstrapSeedURLs...)
