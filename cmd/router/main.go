@@ -352,14 +352,17 @@ func loadOrCreateConfig(path string) (*util.Config, error) {
 func applyConfigDefaults(config *util.Config) {
 	def := util.DefaultConfig()
 
-	if len(config.SeedRouters) == 0 {
-		config.SeedRouters = append([]string{}, def.SeedRouters...)
-	}
-	if len(config.BootstrapSeedURLs) == 0 {
-		config.BootstrapSeedURLs = append([]string{}, def.BootstrapSeedURLs...)
-	}
-	if config.MinSeedRouters <= 0 {
-		config.MinSeedRouters = def.MinSeedRouters
+	// Don't apply seed defaults to bridge/floodfill nodes (they don't need bootstrap)
+	if !config.BridgeMode {
+		if len(config.SeedRouters) == 0 {
+			config.SeedRouters = append([]string{}, def.SeedRouters...)
+		}
+		if len(config.BootstrapSeedURLs) == 0 {
+			config.BootstrapSeedURLs = append([]string{}, def.BootstrapSeedURLs...)
+		}
+		if config.MinSeedRouters <= 0 {
+			config.MinSeedRouters = def.MinSeedRouters
+		}
 	}
 	if len(config.DNSServers) == 0 {
 		config.DNSServers = append([]string{}, def.DNSServers...)

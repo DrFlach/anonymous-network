@@ -2,4 +2,4 @@
 # Lines starting with '#' are comments.
 # Keep this list decentralized: add independent community-operated nodes.
 
-34.118.110.89:7656
+20.123.204.201:7656

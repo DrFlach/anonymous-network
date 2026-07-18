@@ -2,7 +2,7 @@
   "listen_address": "0.0.0.0",
   "listen_port": 7656,
   "seed_routers": [
-    "34.118.110.89:7656"
+    "20.123.204.201:7656"
   ],
   "bootstrap_seed_urls": [
     "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"

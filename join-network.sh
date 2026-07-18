@@ -8,7 +8,7 @@
 set -e
 
 # ── Configuration ──────────────────────────────────────────────
-VPS_SEED="34.118.110.89:7656"
+VPS_SEED="20.123.204.201:7656"
 LISTEN_PORT=7656
 SOCKS_PORT=4447
 INSTALL_DIR="$HOME/anon-network"

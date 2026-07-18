@@ -72,7 +72,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		ListenAddress: "0.0.0.0",
 		ListenPort:    7656,
-		SeedRouters:   []string{"34.118.110.89:7656"},
+			SeedRouters:   []string{"20.123.204.201:7656"},
 		BootstrapSeedURLs: []string{
 			"https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt",
 		},

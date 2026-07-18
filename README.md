@@ -104,7 +104,7 @@ and `config.json` stay persistent between restarts.
 That's it. The router will:
 - Generate a unique identity (saved to `identity.json`)
 - Save identity with secure file mode (`0600`)
-- Connect to the seed node (`34.118.110.89:7656`)
+- Connect to the seed node (`20.123.204.201:7656`)
 - Discover other peers automatically
 - Try to open your router port via UPnP
 - Start a SOCKS5 proxy on `127.0.0.1:4447`
@@ -131,7 +131,7 @@ chromium --proxy-server="socks5://127.0.0.1:4447"
 You should see output like:
 ```
 Transport manager listening on 0.0.0.0:7656
-Peer connected: 34.118.110.89:7656 (total: 1)
+Peer connected: 20.123.204.201:7656 (total: 1)
 UPnP: Port 7656 forwarded successfully
 Built inbound tunnel with 1 hops
 Built outbound tunnel with 1 hops
@@ -262,7 +262,7 @@ A `config.json` file is created automatically on first run. You can customize it
   "listen_address": "0.0.0.0",
   "listen_port": 7656,
   "seed_routers": [
-    "34.118.110.89:7656"
+    "20.123.204.201:7656"
   ],
   "bootstrap_seed_urls": [
     "https://raw.githubusercontent.com/DrFlach/anonymous-network/main/seeds.txt"
@@ -296,7 +296,7 @@ A `config.json` file is created automatically on first run. You can customize it
                        │
               ┌────────┴────────┐
               │   Seed / Relay  │   Public VPS (floodfill)
-              │ 34.118.110.89   │   Knows all peers, relays for NAT users
+              │ 20.123.204.201  │   Knows all peers, relays for NAT users
               └──┬──────┬───┬───┘
                  │      │   │
         ┌────────┘      │   └────────┐
