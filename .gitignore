@@ -46,3 +46,6 @@ override.tf.json
 # Ignore variables files (they often contain secrets like passwords)
 *.tfvars
 *.tfvars.json
+
+# Core dumps (Memory snapshots)
+core.*

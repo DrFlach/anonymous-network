@@ -140,7 +140,7 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
     REMOTE_DIR="/opt/anon-router"
     mkdir -p $REMOTE_DIR
     
-    # Generate router configuration file
+    # Генерируем базовый конфиг
     cat > $REMOTE_DIR/config.json << 'CFGEOF'
     {
         "listen_address": "0.0.0.0",
@@ -150,7 +150,7 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
     }
     CFGEOF
 
-    # Create systemd service unit for the router
+    # Создаем systemd сервис (ИСПРАВЛЕНО: используем абсолютные пути)
     cat > /etc/systemd/system/anon-router.service << 'SVCEOF'
     [Unit]
     Description=Anonymous P2P Network Router
@@ -158,8 +158,8 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
 
     [Service]
     Type=simple
-    WorkingDirectory=$REMOTE_DIR
-    ExecStart=$REMOTE_DIR/anon-router -config $REMOTE_DIR/config.json
+    WorkingDirectory=/opt/anon-router
+    ExecStart=/opt/anon-router/anon-router -config /opt/anon-router/config.json
     Restart=always
     RestartSec=5
     LimitNOFILE=65535
