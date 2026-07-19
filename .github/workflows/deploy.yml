@@ -18,7 +18,7 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-        
+          passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # <-- Вот эта строка
           source: "cmd/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
           target: "/home/azureuser/anon-network"
           overwrite: true
@@ -29,13 +29,11 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
+          passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # <-- И вот эта строка
           script: |
             set -e
             sudo mkdir -p /home/azureuser/anon-network/data
             cd /home/azureuser/anon-network
-           
             sudo docker compose down --remove-orphans || true
-          
             sudo docker compose up -d --build
-            
             sudo docker compose ps
