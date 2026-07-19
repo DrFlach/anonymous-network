@@ -41,18 +41,17 @@ jobs:
 
       - name: Build and start Docker containers
         uses: appleboy/ssh-action@v1.0.3
-        env:
-          GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+
         with:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
-          script: |
+          envs: GRAFANA_ADMIN_PASSWORD
+          script: 
             set -euo pipefail
             cd /home/azureuser/anon-network
-            export GRAFANA_ADMIN_PASSWORD="$GRAFANA_ADMIN_PASSWORD"
-            sudo docker compose down --remove-orphans || true
-            sudo docker compose up -d --build
+            sudo -E docker compose down --remove-orphans || true
+            sudo -E docker compose up -d --build
             sudo docker compose ps
 
       - name: Verify deployment health
