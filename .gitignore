@@ -64,3 +64,5 @@ redhat.pub
 azure-terraform/ssh_keys/*
 ssh_keys/*
 !ssh_keys/*.pub
+identity.json
+config.json

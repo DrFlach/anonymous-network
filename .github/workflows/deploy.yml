@@ -8,6 +8,10 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      ROUTER_CONFIG_JSON: ${{ secrets.ROUTER_CONFIG_JSON }}
+      ROUTER_IDENTITY_JSON: ${{ secrets.ROUTER_IDENTITY_JSON }}
+      GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,10 +22,33 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
-          # Добавили pkg/ в список source:
-          source: "cmd/,pkg/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
+          source: "cmd/,pkg/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml,.dockerignore"
           target: "/home/azureuser/anon-network"
           overwrite: true
+
+      - name: Create runtime secrets on VM from GitHub secrets
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          env:
+            ROUTER_CONFIG_JSON: ${{ secrets.ROUTER_CONFIG_JSON }}
+            ROUTER_IDENTITY_JSON: ${{ secrets.ROUTER_IDENTITY_JSON }}
+          script: |
+            set -euo pipefail
+            sudo install -d -m 0755 -o azureuser -g azureuser /home/azureuser/anon-network/data
+            sudo rm -f /home/azureuser/anon-network/data/config.json /home/azureuser/anon-network/data/identity.json
+            python3 - <<'PY'
+            import os
+            import pathlib
+
+            config_path = pathlib.Path('/home/azureuser/anon-network/data/config.json')
+            identity_path = pathlib.Path('/home/azureuser/anon-network/data/identity.json')
+            config_path.write_text(os.environ['ROUTER_CONFIG_JSON'], encoding='utf-8')
+            identity_path.write_text(os.environ['ROUTER_IDENTITY_JSON'], encoding='utf-8')
+            PY
+            sudo chown azureuser:azureuser /home/azureuser/anon-network/data/config.json /home/azureuser/anon-network/data/identity.json
 
       - name: Build and start Docker containers
         uses: appleboy/ssh-action@v1.0.3
@@ -29,10 +56,35 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
+          env:
+            GRAFANA_ADMIN_PASSWORD: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
           script: |
-            set -e
-            sudo mkdir -p /home/azureuser/anon-network/data
+            set -euo pipefail
             cd /home/azureuser/anon-network
+            export GRAFANA_ADMIN_PASSWORD="$GRAFANA_ADMIN_PASSWORD"
             sudo docker compose down --remove-orphans || true
             sudo docker compose up -d --build
             sudo docker compose ps
+
+      - name: Verify deployment health
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /home/azureuser/anon-network
+            for attempt in $(seq 1 30); do
+              if curl -fsS http://127.0.0.1:9090/-/healthy >/dev/null 2>&1 && \
+                 curl -fsS http://127.0.0.1:3000/api/health >/dev/null 2>&1; then
+                echo "Prometheus and Grafana are healthy"
+                exit 0
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "Health checks failed" >&2
+                sudo docker compose ps
+                exit 1
+              fi
+              sleep 5
+            done

@@ -1,11 +1,32 @@
+# Git metadata
 .git
 .gitignore
+.github
 .vscode
-*.log
-anon-router
-anon-router-linux
+.idea
+
+# Runtime secrets and generated data
 identity.json
 config.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.env
+.env*
+data/
 router.dat
+*.log
+
+# Local artifacts
+anon-router
+anon-router-linux
+coverage.out
+*.out
+*.test
+bin/
+tmp/
+__pycache__/
+*.pyc
 **/.DS_Store
 **/.vagrant
