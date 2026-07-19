@@ -15,10 +15,9 @@ jobs:
       - name: Copy project files to VM
         uses: appleboy/scp-action@v0.1.4
         with:
-          host: ${{ secrets.VM_HOST }}
+          host: "52.233.240.203"
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          # passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # <-- Вот эта строка
           source: "cmd/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
           target: "/home/azureuser/anon-network"
           overwrite: true
@@ -26,10 +25,9 @@ jobs:
       - name: Build and start Docker containers
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.VM_HOST }}
+          host: "52.233.240.203"
           username: ${{ secrets.VM_USER }}
           key: ${{ secrets.VM_SSH_KEY }}
-          # passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # <-- И вот эта строка
           script: |
             set -e
             sudo mkdir -p /home/azureuser/anon-network/data
