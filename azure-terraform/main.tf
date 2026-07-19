@@ -137,7 +137,7 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
 
   admin_ssh_key {
     username   = "azureuser"
-    public_key = file("${path.module}/ssh_keys/laptop2.pub") 
+    public_key = file("${path.module}/ssh_keys/redhat.pub") 
   }
 
   os_disk {

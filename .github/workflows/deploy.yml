@@ -1,53 +1,41 @@
 name: Deploy Anon Router to Azure
 
-# Запускать пайплайн при каждом пуше в ветку main
 on:
   push:
     branches:
       - main
 
 jobs:
-  build-and-deploy:
-    runs-on: ubuntu-latest # Выделяем временный Linux-сервер от GitHub
-
+  deploy:
+    runs-on: ubuntu-latest
     steps:
-    # 1. Скачиваем код из репозитория
-    - name: Checkout Code
-      uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    # 2. Устанавливаем окружение Go
-    - name: Setup Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.21' #версия
+      - name: Copy project files to VM
+        uses: appleboy/scp-action@v0.1.4
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+        
+          source: "cmd/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
+          target: "/home/azureuser/anon-network"
+          overwrite: true
 
-    # 3. Компилируем бинарник под Linux/amd64 
-    - name: Build Go binary
-      run: |
-        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o anon-router ./cmd/router/
-
-    # 4. Копируем бинарник на сервер во временную папку пользователя
-    - name: Copy binary to Azure VM
-      uses: appleboy/scp-action@v0.1.7
-      with:
-        host: ${{ secrets.VM_HOST }}
-        username: ${{ secrets.VM_USERNAME }}
-        key: ${{ secrets.VM_SSH_KEY }}
-        passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # Добавили пароль
-        source: "anon-router"
-        target: "/home/azureuser/"
-
-    # 5. Перемещаем файл в /opt, выдаем права и перезапускаем сервис
-    - name: Restart systemd service
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.VM_HOST }}
-        username: ${{ secrets.VM_USERNAME }}
-        key: ${{ secrets.VM_SSH_KEY }}
-        passphrase: ${{ secrets.VM_SSH_PASSPHRASE }} # Добавили пароль
-        script: |
-          sudo mv /home/azureuser/anon-router /opt/anon-router/anon-router
-          sudo chmod +x /opt/anon-router/anon-router
-          sudo systemctl restart anon-router
-          sleep 2
-          sudo systemctl status anon-router --no-pager
+      - name: Build and start Docker containers
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+            sudo mkdir -p /home/azureuser/anon-network/data
+            cd /home/azureuser/anon-network
+           
+            sudo docker compose down --remove-orphans || true
+          
+            sudo docker compose up -d --build
+            
+            sudo docker compose ps
