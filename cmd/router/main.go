@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"network/pkg/crypto"
 	"network/pkg/netdb"
 	"network/pkg/proxy"
@@ -24,6 +25,20 @@ import (
 	"network/pkg/tunnel"
 	"network/pkg/util"
 )
+
+func startMetricsServer(logger *util.Logger) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	logger.Info("Metrics endpoint available at http://0.0.0.0:8080/metrics")
+	if err := http.ListenAndServe(":8080", mux); err != nil {
+		logger.Error("Metrics server stopped: %v", err)
+	}
+}
 
 func main() {
 	// Command line flags
@@ -47,6 +62,8 @@ func main() {
 	if *debug {
 		logger.SetLevel(util.DEBUG)
 	}
+
+	go startMetricsServer(logger)
 
 	// Handle verify mode — quick self-test of encryption subsystems
 	if *verify {

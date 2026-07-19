@@ -86,6 +86,19 @@ resource "azurerm_network_security_group" "anon_nsg" {
     source_address_prefix      = "*"
     destination_address_prefix = "*"
   }
+
+  # Open port for Grafana UI
+  security_rule {
+    name                       = "Grafana"
+    priority                   = 1004
+    direction                  = "Inbound"
+    access                     = "Allow"
+    protocol                   = "Tcp"
+    source_port_range          = "*"
+    destination_port_range     = "3000"
+    source_address_prefix      = "*"
+    destination_address_prefix = "*"
+  }
 }
 
 # Network Interface (NIC) for the VM
@@ -119,7 +132,12 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
 
   admin_ssh_key {
     username   = "azureuser"
-    public_key = file("~/.ssh/id_rsa.pub") # Read local public key
+    public_key = file("${path.module}/ssh_keys/kali.pub") 
+  }
+
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("${path.module}/ssh_keys/laptop2.pub") 
   }
 
   os_disk {

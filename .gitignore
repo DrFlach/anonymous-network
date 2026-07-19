@@ -51,3 +51,16 @@ override.tf.json
 core.*
 
 seeds.txt
+
+#ssh-keys
+id_rsa
+id_rsa_*
+id_ed25519
+*.pem
+*.key
+kali.pub
+redhat.pub
+
+azure-terraform/ssh_keys/*
+ssh_keys/*
+!ssh_keys/*.pub
