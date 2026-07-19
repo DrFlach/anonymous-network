@@ -18,7 +18,8 @@ jobs:
           host: ${{ secrets.VM_HOST }}
           username: ${{ secrets.VM_USERNAME }}
           key: ${{ secrets.VM_SSH_KEY }}
-          source: "cmd/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
+          # Добавили pkg/ в список source:
+          source: "cmd/,pkg/,go.mod,go.sum,Dockerfile,docker-compose.yml,prometheus.yml"
           target: "/home/azureuser/anon-network"
           overwrite: true
 
