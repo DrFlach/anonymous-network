@@ -140,6 +140,11 @@ resource "azurerm_linux_virtual_machine" "anon_vm" {
     public_key = file("${path.module}/ssh_keys/redhat.pub") 
   }
 
+  admin_ssh_key {
+    username   = "azureuser"
+    public_key = file("${path.module}/ssh_keys/github.pub") 
+  }
+
   os_disk {
     caching              = "ReadWrite"
     storage_account_type = "Standard_LRS"
